@@ -1,0 +1,204 @@
+import * as dummy_text from './dummy_text.js';
+import * as convos from './chat_history.js';
+import { v4 as uuidv4 } from 'uuid';
+import * as prompts from './assistant_logic/reasoning_prompts.js';
+import * as asst from './assistant_logic/saigent.js';
+import { EventStreamer } from './event_streamer.js';
+import express from 'express';
+import https from 'https';
+import fss from 'fs';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { basicPromptInst } from './assistant_logic/basic/basic.js';
+
+
+const app = express();
+const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
+const certificate = fss.readFileSync('tls/fullchain.pem', 'utf8');
+const credentials = { key: privateKey, cert: certificate };
+const port = 3333;
+const httpsServer = https.createServer(credentials, app);
+httpsServer.listen(port, () => {
+    console.log(`HTTPS Server running on port ${port}`);
+});
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONVO_DIR = path.join(__dirname, 'conversations'); 
+const ENDPOINT_DIR = path.join(__dirname, 'endpoints_available/known_endpoints.json'); 
+if (!fss.existsSync(CONVO_DIR)) {
+    fss.mkdirSync(CONVO_DIR, { recursive: true });
+}
+function getConvoPath(key) {
+    return path.join(CONVO_DIR, `${key}.json`);
+}
+
+
+app.use(express.static('static'));
+app.use(express.json())
+app.set('view engine', 'ejs');
+app.set('views', './views');
+
+const conversation_cache = {}; //map of conversationuuids to conversation objects.
+const asst_cache = {}; //map of conversationuuids to assistant instances.
+const event_streamers = {}; //map of conversationuuids to sse event streams.
+//map of models to urls
+const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR, 'utf8'));
+console.log(endpoints_available);
+
+app.get('/chat/:key', async (req, res) => {
+    const key = req.params.key;
+    let convo_tree = await find_load_make_convo(key);
+    res.render('chat', { convo_tree });
+});
+
+app.post('/notify', async (req, res) => {
+    const model_registration = req.body;
+    if(model_registration?.notification_type == "register") {
+        endpoints_available[model_registration.model_available] = endpoints_available[model_registration.model_available] ||[];
+        endpoints_available[model_registration.model_available] = [model_registration.access_url, ...endpoints_available[model_registration.model_available]];
+        fs.writeFile(ENDPOINT_DIR, JSON.stringify(endpoints_available));
+    }
+    res.send();
+});
+
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, '/public/index.html'));
+});
+
+
+app.post('/chat_commands/:key', async (req, res) => {
+    const replyContent = req.body;
+    const key = req.params.key;
+    let convo_tree = await find_load_make_convo(replyContent.conversationId);
+    let eventStreamer = event_streamers[convo_tree.conversationId]; 
+    let assistant = asst_cache[convo_tree.conversationId];
+    if(key == 'user_reply') {
+        let new_reply = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent);
+        new_reply.conversationId = convo_tree.conversationId;
+        eventStreamer.broadcastEvent({
+            type: 'reply_committed',
+            payload: new_reply.toJSON()
+        });
+        //save to disk after the assistant replies.
+        initAssistantResponseTo(assistant, new_reply, eventStreamer, 
+            (genned_reply) => {
+                const filePath = getConvoPath(convo_tree.conversationId);
+                convo_tree.save(fs, filePath);
+            });
+    }
+})
+
+
+
+app.get('/chat_events/:key', async (req, res) => {
+    const key = req.params.key;
+    const conversation = await find_load_make_convo(key, false);
+    if(conversation != null) {
+        event_streamers[conversation.conversationId].registerListener(res);
+    }   
+
+    req.on('close', () => {
+        if(conversation != null) {
+            event_streamers[conversation?.conversationId].removeListener(res);
+            console.log('Client disconnected');
+        }
+    });
+});
+
+
+app.get('/events', function(req, res) {
+    const evst = new EventStreamer(res);
+    let textstream = dummy_text.asyncIntGen(50, 100);
+    let accumulated = "";
+    (async () => {
+        for await (const chunk of textstream) {
+            let deltachunk = chunk.choices[0]?.delta?.content || ""
+            accumulated += ' '+deltachunk;
+            evst.broadcastEvent({ type: 'pingchunk', chunk_content: deltachunk, timestamp: new Date() });
+        }
+        evst.broadcastEvent({ type: 'commit', content: accumulated, timestamp: new Date() });
+        
+        console.log('Client disconnected');
+        evst.removeListener(res);
+    }) ();
+});
+
+
+/*retrieves convo from cache if available, or file if not available, or new convo if neither*/
+async function find_load_make_convo(key, make=true){
+    let convo_tree = null;
+    let asst = null;
+    if(key == null && make) {
+        let convo_uuid = uuidv4();
+        convo_tree = new convos.Convo(convo_uuid);
+        const filePath = getConvoPath(convo_tree.conversationId);
+        asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+        convo_tree.save(fs, filePath)
+    } else {
+        convo_tree = conversation_cache[key];        
+    }
+    if(convo_tree == null) {
+        const filePath = getConvoPath(key);
+        convo_tree = await convos.Convo.load(fs, filePath);
+        if(convo_tree != null) {
+            conversation_cache[convo_tree.conversationId] = convo_tree;
+            asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+        }
+    }
+    convo_tree = conversation_cache[key];
+    if(convo_tree == null && make) {
+        let convo_uuid = uuidv4();
+        convo_tree = new convos.Convo(convo_uuid);
+        conversation_cache[convo_tree.conversationId] = convo_tree;
+        const filePath = getConvoPath(convo_tree.conversationId);
+        asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+        convo_tree.save(fs, filePath)
+    }
+    if(convo_tree != null) {
+        if(event_streamers[convo_tree.conversationId] == null)
+            event_streamers[convo_tree.conversationId] = new EventStreamer();
+            asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
+    }
+    return convo_tree
+}
+
+function initAsstFor(convoTree, evst){    
+    let newAsst = new asst.ASST(convoTree)
+    let dummy_text = basicPromptInst(newAsst, endpoints_available);
+    newAsst.init(dummy_text)
+    return newAsst;
+}
+
+function initAssistantResponseTo(asst, responseTo, streamer, commit_callback) {
+    let resultNode = new convos.MessageHistories('assistant', '');
+    resultNode.setIntendedParentNode(responseTo);
+    streamer.broadcastEvent({
+        type: 'asst_reply_init',
+        payload: resultNode.toJSON()
+    })
+    asst.on_commit = (commit_packet, byasst) => {
+        responseTo.addChildReply(resultNode);
+        responseTo.setPath(resultNode.getNodeId());
+        resultNode.setContent(commit_packet);
+        resultNode.setState('committed');
+        if(commit_callback) {
+            commit_callback(resultNode);
+        }
+        streamer.broadcastEvent({
+            type: 'asst_reply_committed',
+            payload: resultNode.toJSON()
+        })
+    };
+
+    asst.on_generate = (generate_packet, byasst) => {
+        resultNode.textContent += generate_packet.delta_content;
+        resultNode.setState('generating');
+        streamer.broadcastEvent({
+            type: 'asst_reply_updated',
+            payload: resultNode.toJSON()
+        })
+    };
+    asst.replyTo(responseTo);
+}

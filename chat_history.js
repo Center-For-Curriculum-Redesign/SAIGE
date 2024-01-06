@@ -2,90 +2,200 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { type } from 'os';
 
-export class BoundedRecencyList {
-    constructor() {
-        this.items = new Map();
-    }
+export const getType = (obj) => obj?.constructor?.name || Object.prototype.toString.call(obj);
 
-    add(item, value) {
-        // Remove item if it exists to update its position
-        if (this.items.has(item)) {
-            this.items.delete(item);
-        }
-        this.items.set(item, value);
-    }
-
-    getItems() {
-        return Array.from(this.items.keys());
-    }
-}
-
-export const recentlyUsed = new BoundedRecencyList();
-
-export const knownFormats = {
-    'inline_quote': {
-        'system': '',
-        'role_strings': {
-            'user': '\nUserMessage: ',
-            'assistant': '\nAssistantMessage: '
-        }
-    }
-};
-
-export class Formatter {
-    constructor(tokenizer = null) {
-        this.tokenizer = tokenizer;
-    }
-
-    stringCompletionFormat(messageNodes, systemPrompt = null, addGenerationPrompt = true) {
-        let formatted = '';
-        for (let m of messageNodes) {
-            if(m.getAuthor() == null && m.getContent() == null) {
-                continue; //empty root node
-            }
-            formatted += `\n${knownFormats['inline_quote']['role_strings'][m.getAuthor()]}${m.getContent()}\n`;
-        }
+export class Convo {
+    constructor(conversationId, systemStartText, startSequence = null, startKvCache = null, formatter = null, tokenizer = null) {
+        this.messageMap = {};        
         
-        if (systemPrompt) {
-            formatted += systemPrompt;
-        }
-        return formatted;
+        this.activePath = null;
+        this.systemPrompt = systemStartText;
+        this.formatter = formatter;
+        this.conversationId = conversationId;
+        // Additional initialization if needed
     }
 
-    roleChatFormat(messageNodes, systemPrompt = null, addGenerationPrompt = true) {
-        let messageDictList = [];
-        let lastRole = 'system';
-        if (systemPrompt !== null) {
-            messageDictList.push({role: 'system', content: systemPrompt});
+    initRoot(rootNode = null) {
+        if(this.messages != null) {
+            throw Error("Conversation already has a root");
         }
-        for (let i = 0; i < messageNodes.length; i++) {
-            let m = messageNodes[i];
-            if(m.getAuthor() == null && m.getContent() == null) {
-                continue; //empty root node
-            }
-            if (lastRole === m.getAuthor()) {
-                messageDictList[i].content += `\n---\n ${m.getContent()}`;
-            } else {
-                messageDictList.push({
-                    role: m.getAuthor(), 
-                    content: m.getContent()
-                });
-            }
-            lastRole = m.getAuthor();
+        if(rootNode == null) {
+            this.messages = new MessageHistories(null, null, this.conversationId, this);
+            this.messages.setNodeId('root');
+        } else {
+            this.messages = rootNode;
         }
+        this.messageMap[this.messages.messagenodeUuid] = this.messages;
+    }
+
+    getNode(messagePath) {
+        if(messagePath == null) return this.messages;
+        let headlesssPath = messagePath.split("root#",2)
+        return this.messages.getNode(headlesssPath.pop());
+    }
+
+    addReplyToUuid(messagenodeUuid, author = "user", textContent = null, notify = false) {
+        let addTo = this.messageMap[messagenodeUuid]
+        let new_node = new MessageHistories(author, textContent, this.conversationId, this);
+        addTo.addChildReply(new_node);
+        this.activePath = new_node.getPath();
+        new_node.setPath();
+        if(notify) {
+            this._on_structure_change('node_added', new_node);
+        }
+        return new_node;
+    }
+
+    getNodeByUuid(uuid) {
+        return this.messageMap[uuid];
+    }
+
+    addReply(messagePath = null, author = "user", textContent = null, notify = false) {
+        let new_node = new MessageHistories(author, textContent, this.conversationId, this);
+        if (this.messages === null) {
+            this.messages = new_node;
+            new_node.setNodeId("0");
+            if(notify) {
+                this._on_structure_change('node_added', new_node);
+            }
+        } else {
+            if (messagePath === null) {
+                messagePath = this.activePath;
+            }
+            this.getNode(messagePath).addChildReply(new_node, notify = false);
+        }
+        this.activePath = new_node.getPath();
+        new_node.setPath();
+        return new_node;
+    }
+
+    roleFormatMessageHistory(messagePath = null, formatter = null, addGenerationPrompt = false) {
+        let messageList = this.messages.historyAsList(messagePath);
+        let messageDictList = this.formatter.roleChatFormat(messageList, this.systemPrompt, addGenerationPrompt);
         return messageDictList;
     }
+
+    stringFormatMessageHistory(messagePath = null, formatter = null, syspromptOverride = null, addGenerationPrompt = false) {
+        let messageList = this.messages.historyAsList(messagePath);
+        let sysprompt = syspromptOverride === null ? this.systemPrompt : syspromptOverride;
+        let formatted = this.formatter.stringCompletionFormat(messageList, sysprompt, addGenerationPrompt);
+        return formatted;
+    }
+    
+    /**
+     * internal wrapper for user definable on_textContent_change.
+     * you can use this to register callbacks whenever something modifies the internal textContent of a messageHistory node.
+     * will emit an object of the form 
+     * 
+     * {
+     * type: 'content_change',
+     * event_name: 'content_change',
+     * nodeInfo: //json object of the messagehistory node
+     * }
+     */
+    _on_textContent_change(nodeInfo) {
+        let nodeInfo_uw = nodeInfo
+        if(nodeInfo.nodeInfo != null) {
+            nodeInfo_uw = nodeInfo.nodeInfo;
+        }
+        nodeInfo_uw.conversationId = this.conversationId;
+        if(this.on_textContent_change) {
+            this.on_textContent_change({
+                type: 'content_change',
+                nodeInfo: nodeInfo_uw
+            });
+        }
+    }
+
+    /**
+     * internal wrapper for user definable on_structure_change.
+     * you can use this to register callbacks for whenever a descendant node has been created or removed
+     * payload will looks like 
+     * {
+     *      type: 'node_added' || 'node_removed',
+     *      event_name: will have same value as `type`,
+     *      changeType: will have same value as `type`,
+     *      nodeInfo: {//JSON of the MessageHistoryNode that was added or removed.
+     *  }
+     * The redundancy in naming is so you can be less careful with how you wrap the payload when broadcasting. 
+     * Please be as irresponsible as possible.
+     */
+    _on_structure_change(changeType, nodeInfo) {
+        let changeType_uw = changeType;
+        let nodeInfo_uw = nodeInfo
+        if(nodeInfo.changeType != null && nodeInfo.nodeInfo != null) {
+            changeType_uw = nodeInfo.changeType;
+            nodeInfo_uw = nodeInfo.nodeInfo;            
+        }
+        nodeInfo_uw.conversationId = this.conversationId;
+        if(changeType != 'node_added' && changeType != 'node_removed') {
+            throw Error("structure changeType must be one of `node_added` or `node_removed`");
+        }
+        if(this.on_structure_change) {
+            let infoObj = {
+                type: changeType_uw,
+                event_name: changeType_uw,
+                changeType : changeType_uw,
+                nodeInfo : nodeInfo_uw.toJSON()
+            }
+            this.on_structure_change(infoObj);
+        }
+    }
+
+    /**
+     * adds a messageHistory node to the internal map for easy lookup.
+     * @param {MessageHistories} messageNode 
+     */
+    register(messageNode) {
+        this.messageMap[messageNode.messagenodeUuid] = messageNode;
+    }
+
+    toJSON(asFiltered=true) {
+        let showPrompt =  asFiltered == true ? null : this.systemPrompt;
+        return {
+            messages : this.messages.toJSON(),
+            activePath : this.activePath,  
+            systemPrompt : showPrompt,          
+            conversationId : this.conversationId,
+            messagenodeUuid : this.conversationId
+        };
+    }
+
+    static fromJSON(json) {
+        let newConvo = new Convo(json.conversationId, json.systemPrompt);
+        newConvo.activePath = json.activePath;
+        newConvo.initRoot(MessageHistories.fromJSON(json.messages, null, newConvo.conversationId, newConvo));
+        return newConvo;
+    }
+
+    async save(fs, filePath) {
+        await fs.writeFile(filePath, JSON.stringify(this.toJSON(false)), 'utf8');
+    }
+
+    static async load(fs, filePath) {
+        try { 
+            await fs.access(filePath, fs.constants.F_OK); // Check if file exists
+            const data = await fs.readFile(filePath, 'utf8'); // Read file contents
+            const asj = JSON.parse(data);
+            return Convo.fromJSON(asj);
+        } catch(e) {
+            return null;
+        }
+    }
 }
 
+
 export class MessageHistories {
-    constructor(author, textContent, conversationId, conversation_node) {
+    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null) {
         this.nodeId = null;
-        this.messagenodeUuid = uuidv4();
+        this.messagenodeUuid = messagenodeUuid || uuidv4();
         this.conversationId = conversationId;
         this.conversation_node = conversation_node;
         this.children = {};
-        this.messageMap = {};
+        this.thoughts = {};
+        this.thoughtsByUuid = {};
         this.textContent = textContent;
         this.author = author;
         this.parentNode = null;
@@ -112,8 +222,85 @@ export class MessageHistories {
         return this.textContent;
     }
 
-    setContent(textCont) {
+    /**creates a new thought node (same as a messagehistory object, just not kept in the childrens map) 
+     * and adds it to this messagehistories thought map.
+    */
+    newThought(author, notify = false) {
+        let newThought = new ThoughtHistories(author, this.conversationId, this.conversation_node);
+        this.thoughts[Object.keys(this.thoughts).length] = newThought;
+        this.thoughtsByUuid[newThought.messagenodeUuid] = newThought;
+        newThought.thoughtType = "subThought";
+        if(notify && this.conversation_node != null) {
+            this.conversation_node._on_structure_change('node_added', newThought);
+        }
+        return newThought;
+    }
+
+    /**adds a provided thought node (same as a messagehistory object, just not kept in the childrens map) 
+     * to this messagehistories thought map.
+    */
+    addThought(newThoughtNode, notify = false) {
+        newThoughtNode.setNodeId(`${Object.keys(this.thoughts).length}`);
+        this.thoughts[newThoughtNode.getNodeId()] = newThoughtNode;
+        this.thoughtsByUuid[newThoughtNode.messagenodeUuid] = newThoughtNode;
+        newThoughtNode.setParentNode(this);
+        newThoughtNode.thoughtType = "subThought";
+        if(notify && this.conversation_node != null) {
+            this.conversation_node._on_structure_change('node_added', newThoughtNode);
+        }
+        return newThoughtNode;
+    }
+
+    /**
+     * overwrites the current textcontent
+     * @param {string} textCont 
+     * @param {boolean} notify whether to trigger the event notification registered on this messagehistory object (if none has been set, will check the conversation_id's notifier, before giving up)
+     */
+    setContent(textCont, notify=false) {
+        let oldContent = this.textContent
         this.textContent = textCont;
+        if(notify) {
+            this._on_content_change(oldContent, this.textContent);
+        }
+    }
+
+    /**
+     * appends to the existing text content
+     * @param {string} textCont 
+     * @param {boolean} notify whether to trigger the event notification registered on this messagehistory object (if none has been set, will check the conversation_id's notifier, before giving up)
+     */
+    appendContent(textCont, notify=false) {
+        //let oldContent = this.textContent
+        this.textContent += textCont;
+        if(notify) {
+            this._on_content_change(null, textCont);
+            //console.log(textCont);
+        }
+    }
+
+    /**
+     * 
+     * @param {string} prevContent //leaving this value null will cause the notiication to impicitly treat the change as appending instead of replacing
+     * @param {string} newContent 
+     */
+    _on_content_change(prevContent, newContent) {
+        let info
+        if(prevContent != null) {
+            info = this.toJSON(); 
+            info['prev_textContent'] = prevContent;
+        } else {
+            info = {
+                messagenodeUuid : this.messagenodeUuid,
+                conversationId : this.conversationId,
+                deltaChunk: newContent,
+                nodeType: getType(this)
+            }
+        }
+        if(this.on_content_change == null && this.conversation_node != null) {            
+            this.conversation_node._on_textContent_change(info);
+        } else if(this.on_content_change != null) {
+            this.on_content_change(info);
+        }
     }
 
     setNodeId(nodeId) {
@@ -130,14 +317,16 @@ export class MessageHistories {
 
     /**returns the path string to this node */
     getPath() {
-        if (this.parentNode != null) {
+        if (this.parentNode != null && getType(this.parentNode) == getType(this)) {
             return `${this.parentNode.getPath()}#${this.getNodeId()}`;
         } else {
             return this.getNodeId();
         }
     }
     /**returns the actual nodes from the root to this obj*/
-    getPathObjs() {
+    getPathObjs(sameTypeOnly = false) {
+        if(sameTypeOnly && getType(this.parentNode) != getType(this)) 
+            return [this]
         if(this.parentNode != null) {
             return [...this.parentNode.getPathObjs(), this];
         } else return [this];
@@ -148,21 +337,29 @@ export class MessageHistories {
      */
     setPath(activeChildId) {
         this.activeDescendants = activeChildId;
-        if(this.parentNode != null)
+        if(this.parentNode != null && getType(this.parentNode) == getType(this))
             this.parentNode.setPath(this.getNodeId());        
     }
 
-    /*doesn't actually modify the parent, but does set the parameters of this messagehistory node as if the paren
-    adopted it*/
-    setIntendedParentNode(parentNode) {
+
+    /**
+     * doesn't actually modify the parent, but does set the parameters of this messagehistory node as if the paren adopted it
+     * @param {MessageHistories} parentNode 
+     * @param {boolean} notify whether to broadcast an event purporting that this node has been added to the conversation tree.
+     */
+    setIntendedParentNode(parentNode, notify = false) {
         this.setNodeId(`${Object.keys(parentNode.children).length}`);
         this.parentNode = parentNode;
         this.parentNodeUuid = parentNode.messagenodeUuid;
         this.parentNodeId = this.parentNode.nodeId;
         this.conversationId = this.parentNode.conversationId;
         this.conversation_node = this.parentNode.conversation_node;
-        if(this.conversation_node) 
+        if(this.conversation_node) {
             this.conversation_node?.register(this);
+            if(notify) {
+                this.conversation_node._on_structure_change('node_added', this);
+            }
+        }
     }
 
     setParentNode(parentNode) {
@@ -175,10 +372,15 @@ export class MessageHistories {
             this.conversation_node?.register(this);
     }
 
-    addChildReply(newMessageNode) {
-        newMessageNode.setNodeId(`${Object.keys(this.children).length}`);
-        this.children[newMessageNode.getNodeId()] = newMessageNode;
-        newMessageNode.setParentNode(this);
+    addChildReply(newMessageNode, notify) {
+        if(getType(newMessageNode) == getType(this)) {
+            newMessageNode.setNodeId(`${Object.keys(this.children).length}`);
+            this.children[newMessageNode.getNodeId()] = newMessageNode;
+            newMessageNode.setParentNode(this);
+            if(notify && this.conversation_node != null) {
+                this.conversation_node._on_structure_change('node_added', newMessageNode);
+            }
+        }
         return newMessageNode;
     }
 
@@ -200,7 +402,7 @@ export class MessageHistories {
         } else if (splitted.length > 1) {
             let nextDesc = splitted[1].split("#", 2)[0];            
             if (nextDesc in this.children) {
-                this.activeDescendants = nextDesc;
+                //this.activeDescendants = nextDesc;
                 return [this].concat(this.children[nextDesc].historyAsList(splitted[1], fullSequence));
             } else {
                 return [this];
@@ -212,15 +414,22 @@ export class MessageHistories {
     // Converts the current object and its children to a JSON object
     toJSON() {
         let childrenJSON = {};
+        let thoughtJSON = {};
         for (let key in this.children) {
             childrenJSON[key] = this.children[key].toJSON();
         }
 
+        for (let key in this.thoughts) {
+            thoughtJSON[key] = this.thoughts[key].toJSON();
+        }
+
         return {
+            nodeType : getType(this),
             nodeId: this.nodeId,
             messagenodeUuid: this.messagenodeUuid,
             conversationId: this.conversationId,
             children: childrenJSON,
+            thoughts: thoughtJSON,
             activeDescendants : this.activeDescendants,
             textContent: this.textContent,
             author: this.author,
@@ -233,9 +442,9 @@ export class MessageHistories {
 
     // Static method to create a MessageHistories object from a JSON object
     static fromJSON(json, parentNode = null, conversation_id, conversation_node) {
-        let messageHistory = new MessageHistories(json.author, json.textContent, conversation_id, conversation_node);
+        let messageHistory = new MessageHistories(json.author, json.textContent, conversation_id, conversation_node, json.messagenodeUuid);
+        messageHistory.activeDescendants = json.activeDescendants;
         messageHistory.nodeId = json.nodeId;
-        messageHistory.messagenodeUuid = json.messagenodeUuid;
         messageHistory.parentNode = parentNode;
         if(parentNode != null)
             messageHistory.parentNodeUuid = parentNode.messagenodeUuid;
@@ -248,105 +457,70 @@ export class MessageHistories {
         for (let key in json.children) {
             messageHistory.addChildReply(MessageHistories.fromJSON(json.children[key], messageHistory, conversation_id, conversation_node));
         }
+        for (let key in json.thoughts) {
+            messageHistory.addThought(ThoughtHistories.fromJSON(json.thoughts[key], messageHistory, conversation_id, conversation_node));
+        }
 
         return messageHistory;
     }
 }
 
-export class Convo {
-    constructor(conversationId, systemStartText, startSequence = null, startKvCache = null, formatter = null, tokenizer = null) {
-        this.messageMap = {};
-        this.messages = new MessageHistories(null, null, conversationId, this);
-        this.messages.setNodeId('root');
-        this.activePath = null;
-        this.systemPrompt = systemStartText;
-        this.formatter = formatter;
-        this.conversationId = conversationId;
-        // Additional initialization if needed
+export class ThoughtHistories extends MessageHistories {
+    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null, thoughtTitle) {
+        super(author, textContent, conversationId, conversation_node , messagenodeUuid = null);
+        this.thoughtTitle = thoughtTitle;
     }
 
-    getNode(messagePath) {
-        if(messagePath == null) return this.messages;
-        let headlesssPath = messagePath.split("root#",2)
-        return this.messages.getNode(headlesssPath.pop());
+    setThoughtTitle(thoughtTitle) {
+        this.thoughtTitle = thoughtTitle;
     }
 
-    addReplyToUuid(messagenodeUuid, author = "user", textContent = null) {
-        let addTo = this.messageMap[messagenodeUuid]
-        let new_node = new MessageHistories(author, textContent, this.conversationId, this);
-        addTo.addChildReply(new_node);
-        this.activePath = new_node.getPath();
-        new_node.setPath();
-        return new_node;
-    }
-
-    addReply(messagePath = null, author = "user", textContent = null) {
-        let new_node = new MessageHistories(author, textContent, this.conversationId, this);
-        if (this.messages === null) {
-            this.messages = new_node;
-            new_node.setNodeId("0");
-        } else {
-            if (messagePath === null) {
-                messagePath = this.activePath;
-            }
-            this.getNode(messagePath).addChildReply(new_node);
+    static fromJSON(json, parentNode = null, conversation_id, conversation_node) {
+        let messageHistory = new ThoughtHistories(json.author, json.textContent, conversation_id, conversation_node, json.messagenodeUuid);
+        messageHistory.nodeId = json.nodeId;
+        messageHistory.parentNode = parentNode;
+        messageHistory.thoughtType = json.thoughtType;
+        if(parentNode != null)
+            messageHistory.parentNodeUuid = parentNode.messagenodeUuid;
+        messageHistory.conversationId = json.conversationId;
+        if(conversation_node) { 
+            conversation_node.register(messageHistory.conversation_node)
         }
-        this.activePath = new_node.getPath();
-        new_node.setPath();
-        return new_node;
+        messageHistory.state = json.state;
+
+        for (let key in json.children) {
+            messageHistory.addChildReply(ThoughtHistories.fromJSON(json.children[key], messageHistory, conversation_id, conversation_node));
+        }
+        for (let key in json.thoughts) {
+            messageHistory.addThought(ThoughtHistories.fromJSON(json.thoughts[key], messageHistory, conversation_id, conversation_node));
+        }
+
+        return messageHistory;
     }
 
-    roleFormatMessageHistory(messagePath = null, formatter = null, addGenerationPrompt = false) {
-        let messageList = this.messages.historyAsList(messagePath);
-        let messageDictList = this.formatter.roleChatFormat(messageList, this.systemPrompt, addGenerationPrompt);
-        return messageDictList;
+    toJSON() {
+        let supJ = super.toJSON();
+        supJ['thoughtType'] = this.thoughtType;
+        supJ['thoughtTitle'] = this.thoughtTitle;
+        return supJ;
     }
 
-    stringFormatMessageHistory(messagePath = null, formatter = null, syspromptOverride = null, addGenerationPrompt = false) {
-        let messageList = this.messages.historyAsList(messagePath);
-        let sysprompt = syspromptOverride === null ? this.systemPrompt : syspromptOverride;
-        let formatted = this.formatter.stringCompletionFormat(messageList, sysprompt, addGenerationPrompt);
-        return formatted;
-    }   
-
-    /**
-     * adds a messageHistory node to the internal map for easy lookup.
-     * @param {MessageHistories} messageNode 
-     */
-    register(messageNode) {
-        this.messageMap[messageNode.messagenodeUuid] = messageNode;
+    addChildReply(newMessageNode, notify=false) {
+        newMessageNode.thoughtType = "thoughtReply"; 
+        return super.addChildReply(newMessageNode);
     }
 
-    toJSON(asFiltered=true) {
-        let showPrompt =  asFiltered == true ? null : this.systemPrompt;
-        return {
-            messages : this.messages.toJSON(),
-            activePath : this.activePath,  
-            systemPrompt : showPrompt,          
-            conversationId : this.conversationId,
-            messagenodeUuid : this.conversationId
-        };
-    }
-
-    static fromJSON(json) {
-        let newConvo = new Convo(json.conversationId, json.systemPrompt);
-        newConvo.activePath = json.activePath;
-        newConvo.messages = MessageHistories.fromJSON(json.messages, null, newConvo.conversationId, newConvo);
-        return newConvo;
-    }
-
-    async save(fs, filePath) {
-        await fs.writeFile(filePath, JSON.stringify(this.toJSON(false)), 'utf8');
-    }
-
-    static async load(fs, filePath) {
-        try { 
-            await fs.access(filePath, fs.constants.F_OK); // Check if file exists
-            const data = await fs.readFile(filePath, 'utf8'); // Read file contents
-            const asj = JSON.parse(data);
-            return Convo.fromJSON(asj);
-        } catch(e) {
-            return null;
+    /**returns the closest ancestor of this node which is of type MessageHistory */
+    getMessageParent() {
+        if(this.parentNode == null) {
+            throw Error("This thought has no thinker");
+        }
+        if(getType(this.parentNode) == 'MessageHistories') {
+            return this.parentNode;
+        } else {
+            return this.parentNode.getMessageParent();
         }
     }
 }
+
+

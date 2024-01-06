@@ -1,25 +1,31 @@
+import express from 'express';
+
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as prompts from './assistant_logic/reasoning_prompts.js';
 import * as asst from './assistant_logic/saigent.js';
 import { EventStreamer } from './event_streamer.js';
-import express from 'express';
-import https from 'https';
+
 import fss from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { basicPromptInst } from './assistant_logic/basic/basic.js';
-
-
-const app = express();
+import { basicPromptInst, promptSearcher } from './assistant_logic/basic/basic.js';
+import {selfRagPromptInst} from './assistant_logic/selfrag/selfrag.js';
+import { createSecureServer } from 'http2';
+import http2Express from 'http2-express-bridge';
+import { ponderPromptInst } from './assistant_logic/basic/consider.js';
+const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
 const certificate = fss.readFileSync('tls/fullchain.pem', 'utf8');
 const credentials = { key: privateKey, cert: certificate };
 const port = 3333;
-const httpsServer = https.createServer(credentials, app);
-httpsServer.listen(port, () => {
+const httpsServer = createSecureServer(credentials, app);
+httpsServer.on('error', (err)=> {
+    console.error('Server failed to start:', err);
+});
+httpsServer.listen(port, (err) => {
     console.log(`HTTPS Server running on port ${port}`);
 });
 
@@ -43,12 +49,18 @@ const conversation_cache = {}; //map of conversationuuids to conversation object
 const asst_cache = {}; //map of conversationuuids to assistant instances.
 const event_streamers = {}; //map of conversationuuids to sse event streams.
 //map of models to urls
-const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR, 'utf8'));
+export const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR, 'utf8'));
 console.log(endpoints_available);
+
+
+app.get('/chat/', async (req, res) => {
+    let convo_tree = await find_load_make_convo('new', null);
+    res.render('chat', { convo_tree });
+})
 
 app.get('/chat/:key', async (req, res) => {
     const key = req.params.key;
-    let convo_tree = await find_load_make_convo(key);
+    let convo_tree = await find_load_make_convo(key, null);
     res.render('chat', { convo_tree });
 });
 
@@ -71,18 +83,21 @@ app.get('/', (req, res) => {
 app.post('/chat_commands/:key', async (req, res) => {
     const replyContent = req.body;
     const key = req.params.key;
-    let convo_tree = await find_load_make_convo(replyContent.conversationId);
-    let eventStreamer = event_streamers[convo_tree.conversationId]; 
+    let convo_tree = await find_load_make_convo(replyContent.conversationId, null);
+    //let eventStreamer = event_streamers[convo_tree.conversationId]; 
     let assistant = asst_cache[convo_tree.conversationId];
-    if(key == 'user_reply') {
-        let new_reply = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent);
-        new_reply.conversationId = convo_tree.conversationId;
-        eventStreamer.broadcastEvent({
-            type: 'reply_committed',
+    if(key.endsWith('_reply')) {
+        let replyTo = convo_tree.getNodeByUuid(replyContent.replyingTo);
+        if(key == 'user_reply') {
+            replyTo = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent, true);
+            replyTo.conversationId = convo_tree.conversationId;
+        }
+        /*eventStreamer.broadcastEvent({
+            event_name: 'reply_committed',
             payload: new_reply.toJSON()
-        });
+        });*/
         //save to disk after the assistant replies.
-        initAssistantResponseTo(assistant, new_reply, eventStreamer, 
+        initAssistantResponseTo(assistant, replyTo,
             (genned_reply) => {
                 const filePath = getConvoPath(convo_tree.conversationId);
                 convo_tree.save(fs, filePath);
@@ -94,8 +109,8 @@ app.post('/chat_commands/:key', async (req, res) => {
 
 app.get('/chat_events/:key', async (req, res) => {
     const key = req.params.key;
-    const conversation = await find_load_make_convo(key, false);
-    if(conversation != null) {
+    const conversation = await find_load_make_convo(key, res, true);
+    /*if(conversation != null) {
         event_streamers[conversation.conversationId].registerListener(res);
     }   
 
@@ -104,7 +119,7 @@ app.get('/chat_events/:key', async (req, res) => {
             event_streamers[conversation?.conversationId].removeListener(res);
             console.log('Client disconnected');
         }
-    });
+    });*/
 });
 
 
@@ -116,9 +131,9 @@ app.get('/events', function(req, res) {
         for await (const chunk of textstream) {
             let deltachunk = chunk.choices[0]?.delta?.content || ""
             accumulated += ' '+deltachunk;
-            evst.broadcastEvent({ type: 'pingchunk', chunk_content: deltachunk, timestamp: new Date() });
+            evst.broadcastEvent({ event_name: 'pingchunk', chunk_content: deltachunk, timestamp: new Date() });
         }
-        evst.broadcastEvent({ type: 'commit', content: accumulated, timestamp: new Date() });
+        evst.broadcastEvent({ event_name: 'commit', content: accumulated, timestamp: new Date() });
         
         console.log('Client disconnected');
         evst.removeListener(res);
@@ -127,12 +142,13 @@ app.get('/events', function(req, res) {
 
 
 /*retrieves convo from cache if available, or file if not available, or new convo if neither*/
-async function find_load_make_convo(key, make=true){
+async function find_load_make_convo(key, res, make=true){
     let convo_tree = null;
     let asst = null;
     if(key == null && make) {
         let convo_uuid = uuidv4();
         convo_tree = new convos.Convo(convo_uuid);
+        convo_tree.initRoot();
         const filePath = getConvoPath(convo_tree.conversationId);
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
         convo_tree.save(fs, filePath)
@@ -151,6 +167,7 @@ async function find_load_make_convo(key, make=true){
     if(convo_tree == null && make) {
         let convo_uuid = uuidv4();
         convo_tree = new convos.Convo(convo_uuid);
+        convo_tree.initRoot();
         conversation_cache[convo_tree.conversationId] = convo_tree;
         const filePath = getConvoPath(convo_tree.conversationId);
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
@@ -158,47 +175,73 @@ async function find_load_make_convo(key, make=true){
     }
     if(convo_tree != null) {
         if(event_streamers[convo_tree.conversationId] == null)
-            event_streamers[convo_tree.conversationId] = new EventStreamer();
+            event_streamers[convo_tree.conversationId] = new EventStreamer(res);
             asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
     }
+
+    let streamer = event_streamers[convo_tree.conversationId];
+    if(res != null) 
+        streamer.registerListener(res);
+    convo_tree.on_textContent_change = (newNode) => {
+        let currStream = event_streamers[convo_tree.conversationId];
+        currStream.broadcastEvent({
+            event_name: 'content_change',
+            payload: newNode.nodeInfo
+        })
+    }
+    convo_tree.on_structure_change = (newNode)=> {
+        let currStream = event_streamers[convo_tree.conversationId];
+        currStream.broadcastEvent({
+            event_name: 'structure_change',
+            payload: newNode
+        })
+    };
     return convo_tree
 }
 
 function initAsstFor(convoTree, evst){    
     let newAsst = new asst.ASST(convoTree)
-    let dummy_text = basicPromptInst(newAsst, endpoints_available);
+    //let dummy_text = basicPromptInst(newAsst, endpoints_available);
+    let dummy_text = ponderPromptInst(newAsst, endpoints_available);
+    //let dummy_text = selfRagPromptInst(newAsst, endpoints_available);//promptSearcher(newAsst, endpoints_available);
     newAsst.init(dummy_text)
     return newAsst;
 }
 
-function initAssistantResponseTo(asst, responseTo, streamer, commit_callback) {
+function initAssistantResponseTo(asst, responseTo, commit_callback) {
     let resultNode = new convos.MessageHistories('assistant', '');
-    resultNode.setIntendedParentNode(responseTo);
-    streamer.broadcastEvent({
-        type: 'asst_reply_init',
+    resultNode.setIntendedParentNode(responseTo, true);
+    /*streamer.broadcastEvent({
+        event_name: 'asst_reply_init',
         payload: resultNode.toJSON()
-    })
+    })*/
     asst.on_commit = (commit_packet, byasst) => {
         responseTo.addChildReply(resultNode);
         responseTo.setPath(resultNode.getNodeId());
         resultNode.setContent(commit_packet);
         resultNode.setState('committed');
+        let currStream = event_streamers[responseTo.conversationId];
         if(commit_callback) {
             commit_callback(resultNode);
         }
-        streamer.broadcastEvent({
-            type: 'asst_reply_committed',
+        currStream.broadcastEvent({
+            event_name: 'asst_reply_committed',
             payload: resultNode.toJSON()
         })
     };
 
-    asst.on_generate = (generate_packet, byasst) => {
-        resultNode.textContent += generate_packet.delta_content;
-        resultNode.setState('generating');
-        streamer.broadcastEvent({
-            type: 'asst_reply_updated',
-            payload: resultNode.toJSON()
+    asst.on_state_change = (generatePacket, byasst) => {
+        let currStream = event_streamers[byasst.convo_tree.conversationId];
+        currStream.broadcastEvent({
+            event_name: 'asst_state_change',
+            payload: generatePacket
         })
     };
-    asst.replyTo(responseTo);
+
+    /*asst.on_generate = (generate_packet, byasst) => {
+        resultNode.textContent += generate_packet.delta_content;
+        resultNode.setState('generating');
+        
+    };*/
+    asst.replyInto(resultNode);
 }

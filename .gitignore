@@ -3,3 +3,5 @@ node_modules/*
 known_endpoints/*
 tls/fullchain.pem
 tls/privkey.pem
+nohup.out
+.env

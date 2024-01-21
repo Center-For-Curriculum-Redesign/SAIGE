@@ -199,7 +199,7 @@ export class MessageHistories {
         this.textContent = textContent;
         this.author = author;
         this.parentNode = null;
-        this.state = (this.author == 'user') ? 'committed' : 'init';
+        this.state = (this.author == 'user' || this.author == 'system') ? 'committed' : 'init';
         if(conversation_node) this.conversation_node?.register(this);
     }
 

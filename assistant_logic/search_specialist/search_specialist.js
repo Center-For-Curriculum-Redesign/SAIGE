@@ -2,7 +2,6 @@ import { MessageHistories, ThoughtHistories } from "../../chat_history.js";
 import { AnalysisNode, MatchFilter, PromptNode } from "../reasoning_prompts.js";
 
 const prmpt_searcher = new PromptNode(`
-~END OF EXCERPT~
 The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search>relevant string here</meta-search>\`. You may submit multiple search requests at a time by responding with the format:
 
 <meta-search>first hypothetical excerpt that might plausibly appear in a relevant article</meta-search>
@@ -36,6 +35,7 @@ const SUSChatFormatter = {
 
 const dummy_searcassist_role = new ThoughtHistories('assistant');
 const cite_role = new MessageHistories('citation');
+const dummy_system = new MessageHistories('system');
 const dummy_user = new MessageHistories('user');
 
 let metasearchtags = new MatchFilter(['<meta-search>'], ['</meta-search>']);
@@ -66,7 +66,7 @@ export const searcher = new AnalysisNode(
                 s.convo_branch,
                 null,
                 false);
-        let as_system = '~START OF EXCERPT~\n'+excerpt_text+'\n'+prmpt_searcher.getContent();
+        let as_system = '<meta-excerpt>\n'+excerpt_text+'\n</meta-excerpt>'+prmpt_searcher.getContent();
         dummy_user.setContent(as_system)
         dummy_searcassist_role.setContent('Here are some searches:\n\n<meta-search> ')
         let roleInstruction = [
@@ -97,6 +97,7 @@ export const searcher = new AnalysisNode(
                 for(let l of splitted) {
                     if(l.length > 2) {
                         search_queries.push(l);
+                        console.log("generating fake text: "+ l);
                     }
                 }
             }
@@ -119,7 +120,6 @@ export const searcher = new AnalysisNode(
                 }
             }
         }
-        
         return {
             run_again: false, /*we're only using this to prepare a prompt, so running just once is fine. but you can 
             have this return a json object to indicate the node should run again with that object as its input packets*/

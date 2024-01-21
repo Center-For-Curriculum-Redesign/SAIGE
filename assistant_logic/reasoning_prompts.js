@@ -299,8 +299,7 @@ export class MatchFilter {
                     current_matchtrack: parser
                 }
                 if(typedChunks.state >= POST_TAG) {
-                    this.reset()
-                    yield {
+                    let result = {
                         chunk: thischunk,
                         parsed_result: accumulated_tagbase, 
                         type: 'tagged', 
@@ -313,6 +312,8 @@ export class MatchFilter {
                         criteria_name_triggered : typedChunks.criteria_name_triggered,
                         current_matchtrack: parser
                     }
+                    this.reset()
+                    yield result;
                     accumulated_tagbase = '';                    
                 }
             }

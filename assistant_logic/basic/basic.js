@@ -7,7 +7,8 @@ import {OpenAI} from "openai";
 import { asyncIntGen } from '../../dummy_text.js';
 import { AnalysisNode, PromptCoordinator, PromptNode, MatchFilter } from '../reasoning_prompts.js';
 
-export const model_required = 'TheBloke/SUS-Chat-34B-AWQ';
+//export const model_required = 'TheBloke/SUS-Chat-34B-AWQ';
+export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
 export const searchtags = new MatchFilter('<meta-search>', '</meta-search>');
 export function basicPromptInst(newAsst, endpoints_available) {
     //TODO: more robustly handle checks for model serving endpoints
@@ -210,25 +211,27 @@ const ponderer = new AnalysisNode(
 
 );
 
-export const Converse = new PromptNode(`You are a helpful education research assistant. Your primary users are teachers and educators. Your purpose is to help your users make research backed decisions about any classroom problems they encounter.
+export const Converse = new PromptNode(`You are a helpful education research assistant. Your primary users are teachers and educators. Your purpose is to help your users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
 You have access to a search tool which you may use at any time to help you find research results that might be relevant to the teacher's question.
 You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`.
 For example, if a math teacher wants research backed advice about how to more effectively teach ESL students you might write
-\`<meta-search></meta-search>\`
-You should try to be creative and cast a wide net when searching, so if the query above returns unhelpful results, you might try again with something like 
-\`<meta-search></meta-search>\`
-You may perform up to two followup searches to try to hone in on a helpful answer. Followup searches should be used if a search yields low quality results (in which case you should try searching with different search terms)
-or if a search result seems to warrant further investigation.
-If you receive a system message indicating that your search budget has temporarily been exhausted, determine whether or not the results you've found are sufficient to answer the user's question, and if so, synthesize an answer 
-for the user from the results. 
+
+\`<meta-search>Teaching fractions across language barriers</meta-search>\`
+
+You should try to be creative and cast a wide net when searching. If the first query returns unhelpful results, or results which are suggestive of more relevant literature to search through,
+you may perform up to two follow-up searches to try to hone in on a helpful answer. 
+
+If you receive a system message indicating that your search budget has temporarily been exhausted, determine whether or not the results you've found are sufficient to answer the user's question, and if so, synthesize an answer for the user from the results. 
+
 If the results are not helpful, simply inform the user that you didn't have much luck and await further instruction.
-Use of the \`search\` tools is for the assistant only. Thet tool should never be mentioned to the user.`);
+
+Use of the \`search\` tools is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.`);
 
 /**Be aware that your search results will periodically be deleted from your chat history, but not from the user's. Sometimes, the user will reference search results which are no longer in your history. If this occurs you may write
 \`<meta-recover></meta-recover>\` to open up the results again so you can get on the same page. For example, if the user references "that paper from Charles Fadel" you may write
 \`<meta-recover></meta-recover>\`
 
-Use of the \`search\` tools is for the assistant only. Thet tool should never be mentioned to the user.
+Use of the \`search\` tools is for the assistant only. The tool should never be mentioned to the user.
 `);*/
 
 const prmptconsider_action = new PromptNode(`
@@ -275,9 +278,9 @@ thinkalittle.setStartNodes(['prepare_action_analysis']);*/
 
 
 export function promptSearcher(newAsst, endpoints_available) {
-    let model_required = 'TheBloke/SUS-Chat-34B-AWQ';
+    let model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
     //TODO: more robustly handle checks for model serving endpoints
-    let model_url = endpoints_available['TheBloke/SUS-Chat-34B-AWQ'][0];
+    let model_url = endpoints_available['TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ'][0];
     let basic_gen = new OpenAI({
         apiKey:"EMPTY",
         baseURL: model_url+"/v1/"}

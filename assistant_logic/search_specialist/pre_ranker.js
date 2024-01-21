@@ -176,7 +176,7 @@ const preranker = async (
 
         let docs_by_query = []
         
-        
+        console.log("got "+queries.length+" queries")
         for(let qnum = 0; qnum < queries.length; qnum++) {
             for(let gk of Object.keys(candidates.granularities)) {
                 let g = candidates.granularities[gk]
@@ -228,12 +228,15 @@ const preranker = async (
             fullDocScores[doc.id] = {crossQ : 0, crossG: 0, distance: -1, date: null}
             
         }*/
-        results = Object.values(excerptScores)
-        results.sort((a, b) => {
+        console.log("sorting db results");
+        let results = Object.values(excerptScores)
+        results = results.sort((a, b) => {
             return b.crossQ - a.crossQ; 
         })
 
-        filtered = result.slice(0, s.in_packets)
+        console.log("filtering db results");
+
+        let filtered = results.slice(0, s.in_packets)
         return {ranked_results : filtered}
 }
 

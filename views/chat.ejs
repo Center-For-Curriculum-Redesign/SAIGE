@@ -1,19 +1,149 @@
-
+<!DOCTYPE html>
 <html> 
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="../css/chat.css">
     </head>
     <body>
-    <div class="convo-container">
-        <div class="messages-container"></div>
-        <div class="user-inputs"> 
-            <textarea class="general-input-text" placeholder="Message SAIGE"></textarea>
-            <button id="send-new-message" onclick="newReply(this)">Send</button>
+        <div class="convo-container">
+            <div class="messages-container"></div>
+            <div class="user-inputs"> 
+                <textarea class="general-input-text" placeholder="Message SAIGE"
+                onkeydown="if(event.key === 'Enter' && !event.shiftKey) {event.preventDefault(); newReply(this); this.value=''}"
+                ></textarea>
+                <button id="send-new-message" onclick="newReply(this)">Send</button>
+            </div>
         </div>
-    </div>
     </body>
     <script src="../js/chat_events.js"></script>
+    
+    <template id="versionTemplate">
+        <div class="version-area message-node">
+            <!-- Hidden Edit Container -->            
+            <div class="response-container">                
+                <!--instances of asst-version-area will go here-->
+            </div>
+            <!--<div class="version-selectors">
+                <button class="prev-button" onclick="showPrev(this)">&lt;</button>
+                    <span class="index-indicator">
+                        <span class="current-index">0</span>/<span class="total-index-count">0</span>
+                    </span>
+                <button class="next-button" onclick="showNext(this)">&gt;</button>
+            </div>-->
+        </div>
+    </template>
+
+    <template id="usertext-versionTemplate">
+        <div class="usertext-version-area message-node">
+            <!-- Hidden Edit Container -->
+            <div class="self-content">
+                <div class="edit-container hidden">
+                    <textarea class="input-text-area"></textarea>
+                    <div class="editing-options">
+                        <button class="submit-button" onclick="altReply(this)">Submit</button>
+                        <button class="cancel-button" onclick="cancelEdit(this)">Cancel</button>
+                    </div>
+                </div>
+    
+                <div class="submitted-text-container">
+                    <!-- Visible Submitted Text Area -->
+                    <div class="submitted-text-area">
+                        <!-- Submitted text will go here -->
+                    </div>
+        
+                    <!-- Edit Pencil Button -->
+                    <button class="edit-pencil-button" onclick="editMessage(this)">🖉 Edit</button>
+                </div>
+            </div>
+            
+            <div class="response-container">
+                <div class="version-selectors">
+                    <button class="prev-button" onclick="showPrev(this)">&lt;</button>
+                        <span class="index-indicator">
+                            <span class="current-index">0</span>/<span class="total-index-count">0</span>
+                        </span>
+                    <button class="next-button" onclick="showNext(this)">&gt;</button>
+                </div>
+                <!--instances of asst-version-area will go here-->
+            </div>
+        </div>
+    </template>
+
+    <template id="thought-versionTemplate">
+        <div class="message-node thought-node">
+            <div class="self-content">
+                <div class="thought-content">
+                    
+                </div>
+                <div class="subthought-content">
+                    
+                </div>
+            </div>
+            <div class="response-container">
+                <div class="version-selectors">
+                    <button class="prev-button" onclick="showPrev(this)">&lt;</button>
+                        <span class="index-indicator">
+                            <span class="current-index">0</span>/<span class="total-index-count">0</span>
+                        </span>
+                    <button class="next-button" onclick="showNext(this)">&gt;</button>
+                </div>                
+            </div>
+        </div>
+    </template>
+    
+    <template id="asst-versionTemplate">
+        <div class="asst-version-area message-node">
+            <!-- Hidden Edit Container -->
+            <div class="self-content">
+                <div class="completed-text-controls">
+                    <div class="completed-text-area">
+                        <!-- completed text will go here -->
+                        
+                    </div>
+                    <button class="regenerate-button" onclick="assistantRegen(this)">&#x21BB; Redo</button>
+                </div>             
+                <div class="thought-text-area hidden">
+                    <button class="close-thoughts" onclick="toggleThoughts(this)">X</button>
+                    <!-- in progress thought event stream content text will go here -->
+                </div>
+                <div class="in-progress-text-controls">
+                    <div class="in-progress-response-text-area">
+                        <!-- in progress output event stream content text will go here -->
+                        
+                    </div>
+                    <button class="cancel-button" onclick="cancelRequest(this)">&#x25AE; Stop</button>            
+                </div>
+                <button class="show-thoughts" onclick="toggleThoughts(this)">Thoughts</button>
+            </div>
+            
+            <div class="response-container">
+                <div class="version-selectors">
+                    <button class="prev-button" onclick="showPrev(this)">&lt;</button>
+                        <span class="index-indicator">
+                            <span class="current-index">0</span>/<span class="total-index-count">0</span>
+                        </span>
+                    <button class="next-button" onclick="showNext(this)">&gt;</button>
+                </div>
+                
+            </div>            
+        </div>
+    </template>
+    
+    <script> 
+        /*ConvEvents.notify({
+                type: 'convo_tree_restructured',
+                subtype: null,
+                server_timestamp: null,
+                manager: ConvEvents,
+                payload: {
+                    reason : 'init',
+                    old_url : this.currenturl,
+                    new_url : url,
+                    old_evs : old_evs,
+                    new_evs : this.evs
+                }
+            })*/
+    </script>
     <script> 
         var convoTree = <%- JSON.stringify(convo_tree.toJSON(true)) %>;
         var rootNode = convoTree.messages;
@@ -57,104 +187,6 @@
                 }
             }
         }
-
-        
     </script>
-    <template id="versionTemplate">
-        <div class="version-area message-node">
-            <!-- Hidden Edit Container -->            
-            <div class="response-container">                
-                <!--instances of asst-version-area will go here-->
-            </div>
-            <!--<div class="version-selectors">
-                <button class="prev-button" onclick="showPrev(this)">&lt;</button>
-                    <span class="index-indicator">
-                        <span class="current-index">0</span>/<span class="total-index-count">0</span>
-                    </span>
-                <button class="next-button" onclick="showNext(this)">&gt;</button>
-            </div>-->
-        </div>
-    </template>
-
-    <template id="usertext-versionTemplate">
-        <div class="usertext-version-area message-node">
-            <!-- Hidden Edit Container -->
-            <div class="self-content">
-                <div class="edit-container hidden">
-                    <textarea class="input-text-area"></textarea>
-                    <button class="submit-button" onclick="altReply(this)">Submit</button>
-                    <button class="cancel-button" onclick="cancelEdit(this)">Cancel</button>
-                </div>
-    
-                <div class="submitted-text-container">
-                    <!-- Visible Submitted Text Area -->
-                    <div class="submitted-text-area">
-                        <!-- Submitted text will go here -->
-                    </div>
-        
-                    <!-- Edit Pencil Button -->
-                    <button class="edit-pencil-button" onclick="editMessage(this)">🖉 Edit</button>
-                </div>
-            </div>
-            <div class="version-selectors">
-                <button class="prev-button" onclick="showPrev(this)">&lt;</button>
-                    <span class="index-indicator">
-                        <span class="current-index">0</span>/<span class="total-index-count">0</span>
-                    </span>
-                <button class="next-button" onclick="showNext(this)">&gt;</button>
-            </div>
-            <div class="response-container">
-                <!--instances of asst-version-area will go here-->
-            </div>
-            
-        </div>
-    </template>
-    
-    <template id="asst-versionTemplate">
-        <div class="asst-version-area message-node">
-            <!-- Hidden Edit Container -->
-            <div class="self-content">             
-                <div class="completed-text-area">
-                    <!-- completed text will go here -->
-                    <button class="regenerate-button">&#x21BB; Refresh</button>
-                </div>
-    
-                <div class="thought-text-area hidden">
-                    <!-- in progress thought event stream content text will go here -->
-                </div>
-    
-                <div class="in-progress-response-text-area">
-                    <!-- in progress output event stream content text will go here -->
-                    <button class="cancel-button">&#x25AE; Stop</button>
-                </div>            
-            </div>
-            <div class="version-selectors">
-                <button class="prev-button" onclick="showPrev(this)">&lt;</button>
-                    <span class="index-indicator">
-                        <span class="current-index">0</span>/<span class="total-index-count">0</span>
-                    </span>
-                <button class="next-button" onclick="showNext(this)">&gt;</button>
-            </div>
-            <div class="response-container">
-                
-            </div>
-            
-        </div>
-    </template>
     <script src="../js/chat.js"></script>
-    <script> 
-        /*ConvEvents.notify({
-                type: 'convo_tree_restructured',
-                subtype: null,
-                server_timestamp: null,
-                manager: ConvEvents,
-                payload: {
-                    reason : 'init',
-                    old_url : this.currenturl,
-                    new_url : url,
-                    old_evs : old_evs,
-                    new_evs : this.evs
-                }
-            })*/
-    </script>
 </html>

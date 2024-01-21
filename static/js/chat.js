@@ -1,7 +1,8 @@
 const usertext_template = document.getElementById('usertext-versionTemplate').content.querySelector(".usertext-version-area");
 const assttext_template = document.getElementById('asst-versionTemplate').content.querySelector(".asst-version-area");
+const thoughttext_template = document.getElementById('thought-versionTemplate').content.querySelector(".thought-node");
 const system_version_template = document.getElementById('versionTemplate').content.querySelector(".version-area");
-
+const getType = (obj) => obj?.constructor?.name || Object.prototype.toString.call(obj);
 
 
 function editMessage(button) {
@@ -33,6 +34,20 @@ async function altReply(button) {
     //hydrateUserMessageNode(result);
     hideElem(editContainer);
     showElem(submittedcont);
+}
+
+async function assistantRegen(button) {
+    const messageDomnode = button.closest(".message-node");
+    priorResponseNode = messageDomnode
+    let msgObj = messageDomnode.asObj;
+    let parentNode = msgObj.parentNode;
+    let replyInfo = {
+        replyingTo: parentNode.messagenodeUuid,
+        conversationId: convoTree.conversationId,
+        asAuthor: 'assistant'
+    }
+
+    const result = await xRq(replyInfo, default_endpoint+'/assistant_reply');
 }
 
 
@@ -67,6 +82,15 @@ async function xRq(json, url=default_endpoint) {
     const data = await response.json();
 }
 
+function toggleThoughts(button) {
+    let parentContainer = button.closest(".self-content");
+    let thoughtsContainer = parentContainer.querySelector('.thought-text-area');
+    if(thoughtsContainer.classList.contains('hidden'))
+        showElem(thoughtsContainer);
+    else
+        hideElem(thoughtsContainer);
+}
+
 function showPrev(button) {
     toggleMessageNode(button, -1);
 }
@@ -84,36 +108,25 @@ function showElem(elem) {
 
 //cycles through the active children of this messagenode
 function toggleMessageNode(button, direction) {
-    const currentMessageNode = button.closest('.message-node');
-    const vselectors = button.closest('.version-selectors');
-    let asObj = currentMessageNode.asObj;
-    let allChildNodes = [];
-    let childrens = currentMessageNode.querySelector('.response-container');
-    let child = childrens.firstChild;
-
-    while (child) {
-        if (child.nodeType === 1 && child.classList.contains('message-node')) {
-            allChildNodes.push(child);
-            hideElem(child)
-        }
-        child = child.nextSibling;
-    }
+    const parDomElem = button.closest('.message-node');
+    //const vselectors = currentMessageNode.closest('.version-selectors');
     
-    if(Object.keys(asObj.children).length == 0) {
-        hideElem(vselectors);
-        return;
-    }
-    asObj.activeDescendants = asObj.activeDescendants == undefined ? '0' : asObj.activeDescendants;
-    const currentIndex = Number(asObj.activeDescendants);
-    let newIndex = (allChildNodes.length + currentIndex + direction) % allChildNodes.length;
-    let newactive = allChildNodes[newIndex];
-    showElem(newactive);
-    asObj.activeDescendants = newactive.asObj.nodeId;
+    let parObj = parDomElem.asObj;
+    let asObj = parObj.children[parObj.activeDescendants];
+    const currentMessageNode = asObj.domElem;
+    const vselectors = parObj.domElem.querySelector('.version-selectors');
+    let siblings = Object.values(parObj.children);
+    let currIndex = Number(asObj.nodeId);
+    let newIndex = (siblings.length + currIndex + direction) % siblings.length;
+    let newMessageNode = siblings[newIndex];
+    parObj.activeDescendant = newIndex;
+    hideElem(currentMessageNode);
+    showElem(newMessageNode.domElem);
     let activeList = activeAsList(convoTree.messages)
     convoTree.activePath = getPathTo(activeList[activeList.length-1]);
-    let currindicator = currentMessageNode.querySelector(".current-index");
-    currindicator.textContent = (Number(asObj.activeDescendants)+1)+'';
-    showExclusive(newactive.asObj);
+    showExclusive(newMessageNode);
+    let currindicator = vselectors.querySelector(".current-index");
+    currindicator.textContent = (Number(newMessageNode.nodeId)+1)+'';
 }
 
 /**
@@ -179,37 +192,24 @@ function getPathTo(messageNode) {
 
 
 function hydrateBaseMessageContainer(messageObj, empty) {
-    let index_indicator = empty.querySelector(".index-indicator");
     messageObj.domElem = empty;
     empty.asObj = messageObj
     let parDom = null; 
+    empty.responseDomElem = empty.querySelector(".response-container");
+    if(messageObj.thoughts != null) {
+        empty.subThoughtDomElem = empty.querySelector(".thought-text-area");
+    }
     if(messageObj.parentNode != null) {
         parDom = messageObj.parentNode.domElem;        
     } else {
         parDom = convoTree.domElem;
         messageObj.parentNode = convoTree;
     }
-    parDom.querySelector(".response-container").appendChild(empty);
-    let vselectors = empty.querySelector(".version-selectors");
-    let currentIndex = index_indicator.querySelector(".current-index");
-    let total_children = index_indicator.querySelector(".total-index-count");
-    if(messageObj?.children) {
-        total_children.textContent = Object.keys(messageObj.children).length;
-        if(Object.keys(messageObj.children).length > 0) {
-            showElem(vselectors);
-            currentIndex.textContent = Number(messageObj.activeDescendants)+1;
-        } else {
-            hideElem(vselectors);
-        }
-    } else {
-        hideElem(vselectors);
-    }
-      
-    
+    parDom.responseDomElem.appendChild(empty); 
     if(messageObj?.parentNode.activeDescendants == messageObj?.nodeId) 
         showElem(empty);
-
 }
+
 function hydrateAssistantMessageContainer(messageObj, empty) {    
     hydrateBaseMessageContainer(messageObj, empty);
     let submittedText = empty.querySelector(".completed-text-area");
@@ -227,47 +227,132 @@ function hydrateUserMessageContainer(messageObj, empty) {
 }
 
 /*the provided message object should correspond to the container itself, not to any of its children*/
-function updateUserMessageContainer(messageObj, onCurrentPath) {
-    let contaier = messageObj.domElem;
-    let total_children = contaier.querySelector(".total-index-count");
-    total_children.textContent = Object.keys(messageObj.children).length;
-    if(onCurrentPath?.includes(messageObj)) {
-        let currentIndex = contaier.querySelector(".current-index");
-        currentIndex.textContent = Number(messageObj.activeDescendants)+1
-    } else if(onCurrentPath != null 
-    && messageObj?.parentNode.activeDescendants != messageObj?.nodeId) {
-        hideElem(contaier);
+function updateUserMessageContainer(messageObj, onCurrentPath) {    
+    if(messageObj.parentNode != null && messageObj.parentNode.children != null)
+        updateChildCounter(messageObj.parentNode);
+   updateChildCounter(messageObj);
+}
+
+function updateChildCounter(messageObj) {
+    let vselector = messageObj.domElem.querySelector('.version-selectors');
+    let total_children = vselector.querySelector(".total-index-count");
+    let children = messageObj.children ||  {'0':messageObj.messages}; 
+    let childCount =  Object.keys(children).length;
+
+    if(childCount <= 1) 
+        hideElem(vselector);
+    total_children.textContent = childCount;
+    let currentIndex = vselector.querySelector(".current-index");
+    if(messageObj?.activeDescendants == null && childCount >0) {
+        //currentIndex.textContent = inferMessageVersion(messageObj);
+        messageObj.activeDescendant = "0";
+    } else
+        currentIndex.textContent = Number(messageObj?.activeDescendants)+1
+    
+    total_children.textContent = childCount;
+    let activeChild = messageObj.children[messageObj.activeDescendants];
+    
+    for(let k in messageObj.children) {
+        hideElem(messageObj.children[k].domElem);
     }
+    if(activeChild != null)
+        showElem(activeChild.domElem);
 }
 
 function updateAsstMessageContainer(messageObj, onCurrentPath) {
     updateUserMessageContainer(messageObj , onCurrentPath);
     let toUpd = messageObj.domElem;
     let submittedText = toUpd.querySelector(".completed-text-area");
+    let submittedControls = submittedText.closest(".completed-text-controls");
     submittedText.textContent = messageObj.textContent;      
     let inProgressText = toUpd.querySelector(".in-progress-response-text-area");
+    let inProgressTextControls = inProgressText.closest(".in-progress-text-controls");
     inProgressText.textContent = messageObj.textContent;
     if(messageObj?.state == 'committed' || messageObj?.state == 'idle') {
-        hideElem(inProgressText);
-        showElem(submittedText);
+        hideElem(inProgressTextControls);
+        showElem(submittedControls);
     } else {
-        hideElem(submittedText);
-        showElem(inProgressText);
+        hideElem(submittedControls);
+        showElem(inProgressTextControls);
     }
 }
 
 let hasHydrated = false;
-ConvEvents.addListener({type: 'convo_tree_restructured', callback: (event)=>{
+ConvEvents.addListener({event_name: 'convo_tree_restructured', callback: (event)=>{
     if(hasHydrated == false ||convoTree.conversationId != event.payload.conversationId) {
         initConvo(event.payload);
     } 
 }});
 
+ConvEvents.addListener({event_name: 'structure_change', callback: (event)=>{
+    let nodeObj = event.payload.nodeInfo || event.payload;
+    let changeType = event.changeType || event.payload.changeType;
+    if(changeType == 'node_added') {
+        if(nodeObj.nodeType == 'MessageHistories') {
+            if(nodeObj.author == 'user') {
+                addUserReply(nodeObj);
+            } else if(nodeObj.author == 'assistant') {
+                addAsstReply(nodeObj);
+            }
+        } else if(nodeObj.nodeType == "ThoughtHistories") {
+            addThought(nodeObj);
+        }
+    }
+}});
 
-ConvEvents.addListener({type: 'reply_committed', callback: (event)=>{
-    if(convoTree.conversationId == event.payload.conversationId) {
-        let newMessage = event.payload;
-        let parentNode = nodeuuidmap[event.payload.parentNodeUuid];
+function addThought(nodeObj) {
+    let hydrated = hydrateThought(nodeObj);
+    nodeObj.domElem = hydrated;
+    nodeuuidmap[nodeObj.messagenodeUuid] = nodeObj;
+    thoughtToParent(nodeObj);
+    return hydrated;
+}
+
+function updateThoughtContainer(nodeObj) {
+    nodeObj.domElem.thoughtContent.textContent = nodeObj.textContent;
+    let asstNode = nodeObj.domElem.closest(".asst-version-area");
+    let thoughtButton = asstNode.querySelector(".show-thoughts");
+    statPing(thoughtButton);
+    updateChildCounter(nodeObj);
+}
+
+function hydrateThought(nodeObj) {
+    let empty = thoughttext_template.cloneNode(true);
+    empty.responseDomElem = empty.querySelector(".response-container");
+    empty.subThoughtDomElem = empty.querySelector(".subthought-content");
+    empty.thoughtContent = empty.querySelector(".thought-content");
+    empty.messaageObj = nodeObj;
+    return empty;
+}
+
+/**adds a nodeObj to its appropriate parent thought or child map*/
+function thoughtToParent(nodeObj) {
+    let parentNode = nodeuuidmap[nodeObj.parentNodeUuid];
+    nodeObj.parentNode = parentNode;
+    let parIndexer = parentNode.children;
+    let parContainer = parentNode.responseDomElem;
+    if(nodeObj.thoughtType == "subThought") {
+        parIndexer = parentNode.thoughts;
+        parContainer = parentNode.domElem.subThoughtDomElem;
+    } else if (nodeObj.thoughtType == "thoughtReply") {
+        parIndexer = parentNode.children;
+        parContainer = parentNode.domElem.responseDomElem;
+    } else {
+        throw new Error("Thoughts must have a type");
+    }
+    nodeObj.parIndexer = parIndexer;
+    nodeObj.parContainer = parContainer;
+    nodeObj.parContainer.appendChild(nodeObj.domElem);
+    nodeObj.parIndexer[nodeObj.nodeId] = nodeObj.messagenodeUuid;
+    updateChildCounter(parentNode);
+}
+
+
+
+function addUserReply(nodeObj) {
+    if(convoTree.conversationId == nodeObj.conversationId) {
+        let newMessage = nodeObj;
+        let parentNode = nodeuuidmap[nodeObj.parentNodeUuid];
         newMessage.parentNode = parentNode;
         nodeuuidmap[newMessage.messagenodeUuid] = newMessage;
         parentNode.children[newMessage.nodeId] = newMessage;
@@ -284,30 +369,17 @@ ConvEvents.addListener({type: 'reply_committed', callback: (event)=>{
         rootward(newMessage, showExclusive);
         //hydrateMessage(newMessage)
     }
+}
+
+ConvEvents.addListener({event_name:`asst_reply_init`, callback: (event)=>{
+    let nodeObj = event.payload.nodeInfo || event.payload;
+    addAsstReply(nodeObj);
 }});
 
-
-ConvEvents.addListener({type: 'asst_reply_committed', callback: (event)=>{
-    if(convoTree.conversationId == event.payload.conversationId) {
-        let newMessage = event.payload;
-        let parentNode = nodeuuidmap[event.payload.parentNodeUuid];
-        let currentVersion = nodeuuidmap[event.payload.messagenodeUuid];
-        newMessage.parentNode = parentNode;
-        nodeuuidmap[newMessage.messagenodeUuid] = newMessage;
-        newMessage.domElem = currentVersion.domElem;
-        parentNode.children[newMessage.nodeId] = newMessage;
-        convoTree.activePath = getPathTo(newMessage);
-        let activeList = historyAsList(convoTree.activePath, null, convoTree.messages);        
-        updateAsstMessageContainer(newMessage, activeList);
-        rootward(newMessage, showExclusive);   
-        //hydrateMessage(newMessage)
-    }
-}});
-
-ConvEvents.addListener({type:`asst_reply_init`, callback: (event)=>{
-    if(convoTree.conversationId == event.payload.conversationId) {
-        let newMessage = event.payload;
-        let parentNode = nodeuuidmap[event.payload.parentNodeUuid];
+function addAsstReply(nodeObj) {
+    if(convoTree.conversationId == nodeObj.conversationId) {
+        let newMessage = nodeObj;
+        let parentNode = nodeuuidmap[nodeObj.parentNodeUuid];
         newMessage.parentNode = parentNode;
         nodeuuidmap[newMessage.messagenodeUuid] = newMessage;
         parentNode.children[newMessage.nodeId] = newMessage;
@@ -318,17 +390,48 @@ ConvEvents.addListener({type:`asst_reply_init`, callback: (event)=>{
         updateAsstMessageContainer(newMessage, activeList);
         rootward(newMessage, showExclusive);        
     }
+}
+
+
+ConvEvents.addListener({event_name: 'asst_reply_committed', callback: (event)=>{
+    let nodeObj = event.payload.nodeInfo || event.payload;
+    commitAsstReply(nodeObj);
 }});
 
-ConvEvents.addListener({type:`asst_reply_updated`, callback: (event)=>{
-    if(convoTree.conversationId == event.payload.conversationId) {
-        let newMessage = event.payload;
+function commitAsstReply(nodeObj) {
+    if(convoTree.conversationId == nodeObj.conversationId) {
+        let newMessage = nodeObj;
+        let parentNode = nodeuuidmap[nodeObj.parentNodeUuid];
+        let currentVersion = nodeuuidmap[nodeObj.messagenodeUuid];
+        newMessage.parentNode = parentNode;
+        nodeuuidmap[newMessage.messagenodeUuid] = newMessage;
+        newMessage.domElem = currentVersion.domElem;
+        parentNode.children[newMessage.nodeId] = newMessage;
+        convoTree.activePath = getPathTo(newMessage);
+        let activeList = historyAsList(convoTree.activePath, null, convoTree.messages);        
+        updateAsstMessageContainer(newMessage, activeList);
+        rootward(newMessage, showExclusive);   
+        //hydrateMessage(newMessage)
+    }
+}
+
+
+ConvEvents.addListener({event_name:`content_change`, callback: (event)=>{
+    let nodeObj = event.payload.nodeInfo || event.payload;
+    if(convoTree.conversationId == nodeObj.conversationId) {
+        let newMessage = nodeObj;
         let currentMessageObj = nodeuuidmap[newMessage.messagenodeUuid];
-        currentMessageObj.textContent = newMessage.textContent;
-        updateAsstMessageContainer(currentMessageObj, [currentMessageObj, currentMessageObj.parentNode]);
-        showElem(currentMessageObj.domElem);
-        showElem(currentMessageObj.parentNode.domElem);
-        
+        if(newMessage.deltaChunk == null)
+            currentMessageObj.textContent = newMessage.textContent;
+        else 
+            currentMessageObj.textContent += newMessage.deltaChunk;
+        if(nodeObj.nodeType== "ThoughtHistories") {
+            updateThoughtContainer(currentMessageObj)
+        } else {
+            updateAsstMessageContainer(currentMessageObj, [currentMessageObj, currentMessageObj.parentNode]);
+            showElem(currentMessageObj.domElem);
+            showElem(currentMessageObj.parentNode.domElem);        
+        }
     }
 }});
 
@@ -384,6 +487,7 @@ function initConvo(newTree) {
     convoTree = newTree;
     unregister(oldtree, true, true)
     fauxNode = system_version_template.cloneNode(true);
+    fauxNode.responseDomElem = fauxNode.querySelector('.response-container')
     nodeuuidmap = {};
     convoTree.domElem = fauxNode;
     fauxNode.asObj = convoTree;
@@ -393,9 +497,10 @@ function initConvo(newTree) {
     funneltree(convoTree.messages);//, m => m.children, c => unregister(c, unlisten=true, undom=true));
     let onCurrentPath = historyAsList(convoTree.activePath, convoTree.activePath, convoTree.messages);
     forAll(convoTree.messages, child=>hydrateMessage(child));
+    convoTree.messages.domElem.classList.add("root");
     forAll(convoTree.messages, child=>updateMessage(child, onCurrentPath));
     forAll(convoTree.messages, child=>{if(child.parentNode.activeDescendants == child.nodeId) showElem(child.domElem)});
-    convoTree.messages.domElem.classList.add("root");
+    
     //onCurrentPath.forEach(node => {hideElem(child, onCurrentPath)});
     
     
@@ -404,4 +509,41 @@ function initConvo(newTree) {
 
 if(convoTree != null && convoTree.conversationId != null) {
     initConvo(convoTree);
+}
+
+//TODO: make this unecessary. Infers the message version to show by default using activepath in case 
+//something gets lost when saving the appropriate default.
+function inferMessageVersion(messaageObj) {
+    let depth = 0; 
+    let currNode = messaageObj;
+    while(currNode.parentNode != null) {
+        currNode = currNode.parentNode;
+        depth++;
+    }
+    return Number(convoTree.activePath.split("#")[depth])+1;
+}
+
+
+function getNodesOfType(nodetype) {
+    let result = [];
+    for(let k in nodeuuidmap) {
+        if(nodeuuidmap[k].nodeType == nodetype)
+            result.push(nodeuuidmap[k]);
+    }
+    return result;
+}
+
+
+function statPing(button) {
+    button.classList.add('pinged');
+    setTimeout(function() {
+        button.classList.add('fade-out');
+        setTimeout(function() {
+            button.classList.remove('pinged');
+            button.classList.remove('fade-out'); 
+            //setTimeout(function() {            
+                   
+            //}, 150);
+        }, 250)
+    }, 40);
 }

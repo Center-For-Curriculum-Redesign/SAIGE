@@ -2,7 +2,7 @@ export class EventStreamer {
     constructor(res) {
         this.listeners = [];
         if(res != null) {
-            this.registerListener(res);
+            this.registerListener(res);            
         }
     }
 
@@ -32,13 +32,25 @@ export class EventStreamer {
     }
 
     registerListener(res) {
-        res.writeHead(200, {
+        res.req.on('close', () => {
+            this.removeListener(res);
+            console.log('Client disconnected');
+        });
+        if(this.listeners.includes(res)) {
+            return;
+        }
+        const headers = {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
             'Access-Control-Allow-Origin': '*',
-        });
+        };
+    
+        // Add the Connection header only for HTTP/1.1 requests
+        if (res.req.httpVersion === '1.1') {
+            headers.Connection = 'keep-alive';
+        }
+        res.writeHead(200, headers);
         this.listeners.push(res);
-        this.sendEventTo({ message: 'Connected to SSE' }, res);
+        this.sendEventTo({ event_name: "ack", message: 'Connected to SSE' }, res);
     } 
 }

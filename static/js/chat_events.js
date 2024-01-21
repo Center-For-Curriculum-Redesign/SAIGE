@@ -10,7 +10,7 @@ class EventSourceManager {
             let old_evs = this.evs;
             this.evs = new EventSource(url);
             this.notify({
-                type: 'source_changed',
+                event_name: 'source_changed',
                 subtype: null,
                 server_timestamp: null,
                 manager: this,
@@ -38,12 +38,13 @@ class EventSourceManager {
         };
 
         this.evs.onerror = (e) => {
-            console.error('EventSource failed.');
+            console.error(e);
         };
     }
 
     notify = (event) => {
-        let candidates = this.eventTypeCallbackMap[event.type];
+        console.log(event);
+        let candidates = this.eventTypeCallbackMap[event.event_name];
         candidates?.forEach(listener => {
             listener(event);
         });
@@ -51,10 +52,10 @@ class EventSourceManager {
 
 
     addListener(l) {
-        let candidates = this.eventTypeCallbackMap[l.type];
+        let candidates = this.eventTypeCallbackMap[l.event_name];
         if(candidates == null) {
             candidates = [];
-            this.eventTypeCallbackMap[l.type] = candidates;
+            this.eventTypeCallbackMap[l.event_name] = candidates;
         }
         if(!candidates.includes(l.callback)) {
             candidates.push(l.callback);
@@ -62,7 +63,7 @@ class EventSourceManager {
     }
 
     removeListener(l) {
-        let candidates = this.eventTypeCallbackMap[l.type];
+        let candidates = this.eventTypeCallbackMap[l.event_name];
         let existsAt = -1;
         do {
             existsAt = candidates.indexOf(l.callback);

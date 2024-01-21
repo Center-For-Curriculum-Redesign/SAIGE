@@ -7,7 +7,7 @@ import * as prompts from './reasoning_prompts.js';
 export class ASST {
     /**
      * @param {Convo} convo_tree the base conversation tree the assistant should work from
-     * @param {prompts.PromptCoordinator} prompt_container the prompt coordinator containing the rules for this assistant's generations
+     * @param {prompts.PromptCoordinator} prompt_coordinator the prompt coordinator containing the rules for this assistant's generations
      * @param {CallableFunction} on_commit callback triggered when all analysis has concluded and a response has been decided on
      * @param {CallableFunction} on_state_change callback triggered whenever the assistant state changes as a result of some internal logic
      * @param {CallableFunction} on_generate callback triggered any time any autorregressive generation occurs for any reason
@@ -16,14 +16,14 @@ export class ASST {
         this.convo_tree = convo_tree;
     }
 
-    replyTo(messageNode) {
-        this.replyingTo = messageNode;
-        let convo_branch = this.replyingTo.getPathObjs();
-        this.prompt_container.begin(convo_branch);      
+    replyInto(messageNode) {
+        this.replyingInto = messageNode;
+        let convo_branch = this.replyingInto.getPathObjs();
+        this.prompt_coordinator.begin(convo_branch);      
     }
 
-    init(prompt_container, on_commit, on_state_change, on_generate) {
-        this.prompt_container = prompt_container;
+    init(prompt_coordinator, on_commit, on_state_change, on_generate) {
+        this.prompt_coordinator = prompt_coordinator;
         this.on_commit = on_commit;
         this.on_state_change = on_state_change;
         this.on_generate = on_generate;
@@ -31,6 +31,12 @@ export class ASST {
         this.am_generating = false; 
         this.stateHints = ['idle'];
     }
+
+    /**TODO: implement
+    cancelGeneration() {
+        this.setAmGenerating(false)
+        this.setAmAnalyzing(false)
+    } */
 
     commit(packet) {
         this.setAmAnalyzing(false);

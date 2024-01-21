@@ -86,7 +86,7 @@ app.post('/prompt_internal', async (req, res) => {
     res.json(new_reply);
 
 // test code, with dummy response
-/*
+
     let resultNode = new convos.MessageHistories('assistant', '');
     resultNode.setIntendedParentNode(new_reply);
     let messagenodeUuid = resultNode.toJSON().messagenodeUuid;
@@ -123,9 +123,10 @@ app.post('/prompt_internal', async (req, res) => {
         const filePath = getConvoPath(convo_tree.conversationId);
         convo_tree.save(fs, filePath);
     }) ();
-*/
+
 // real code, with asst response
 
+/*
     //save to disk after the assistant replies.
     initAssistantResponseTo(assistant, new_reply, eventStreamer, 
         (genned_reply) => {
@@ -133,6 +134,7 @@ app.post('/prompt_internal', async (req, res) => {
             convo_tree.save(fs, filePath);
         }
     );
+*/
 });
 
 app.post('/chat_commands/:key', async (req, res) => {

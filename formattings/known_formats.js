@@ -33,6 +33,10 @@ const ChatML = {
     }
 };
 
+const InstructTagged = {
+    
+}
+
 
 export const known_formats = {
     'TheBloke/SUS-Chat-34B-AWQ' : SUSChatFormatter,

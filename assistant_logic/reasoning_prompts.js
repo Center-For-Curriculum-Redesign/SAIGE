@@ -202,10 +202,12 @@ export class MatchFilter {
         this.startmatches = start;
         this.endmatches = end;
         this.matchtrack = new MatchOnTrack(this.startmatches, this.endmatches);
+        this.active_track = this.matchtrack
     }
 
     reset() {
         this.matchtrack.reset();
+        this.active_track = this.matchtrack
     }
 
     /**
@@ -215,7 +217,7 @@ export class MatchFilter {
      * @returns 
      */
     getTrack() {
-        return this.matchtrack;
+        return this.active_track;
     }
 
     /**
@@ -224,7 +226,7 @@ export class MatchFilter {
      * @param {} matchTrack 
      */
     setTrack(matchTrack) {
-        this.matchtrack = matchTrack;
+        this.active_track = matchTrack;
     }
 
      /**
@@ -245,7 +247,7 @@ export class MatchFilter {
         //let stream = await streamin();
         for await (const chunk of streamin) {
             let deltachunk = extractor(chunk); 
-            let parser = this.matchtrack;           
+            let parser = this.active_track;           
             let typedChunks = this.feedOne(deltachunk);
             accumulated_raw += deltachunk;
             accumulated_raw_chunks.push(deltachunk)
@@ -329,7 +331,7 @@ export class MatchFilter {
      * type: str// one of 'display' if outside of matching tag, or 'tagged' if within a matching tag.
      */
     feedOne(textchunk) {
-        return this.matchtrack.buildMatch(textchunk);
+        return this.active_track.buildMatch(textchunk);
     }
 
     /**

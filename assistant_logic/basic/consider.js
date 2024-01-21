@@ -9,6 +9,7 @@ import e from "express";
 import { pre_ranker, retriever, testresult } from "../search_specialist/pre_ranker.js";
 import { Converse, justrun, searchtags } from "./basic.js";
 import { searcher } from "../search_specialist/search_specialist.js";
+import { typed } from "mathjs";
 
 export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
 export function ponderPromptInst(newAsst, endpoints_available) {
@@ -187,6 +188,7 @@ async function getThoughtResult(metaTrack, decideTrack, metaTagFilter, dummy_use
     const stream = await client.completions.create({//clientHandler({
             model: model_name,
             prompt: mergedStringInstruct,
+            temperature: 0.2,
             min_p: 0.5,
             stream: true,
             max_tokens: 300
@@ -200,8 +202,10 @@ async function getThoughtResult(metaTrack, decideTrack, metaTagFilter, dummy_use
     let parsed_result = '';
     let decision_identified = false;
     let aggregated = currentThought.getContent();
+    let chunkhist = []
     for await (const typedChunk of filteredStream) {
         let deltachunk = typedChunk.chunk;
+        chunkhist.push(typedChunk);
         console.log(typedChunk.from_extraction);
         aggregated += deltachunk;
         s.assistant.setAmAnalyzing(true);
@@ -249,7 +253,7 @@ async function getThoughtResult(metaTrack, decideTrack, metaTagFilter, dummy_use
 }
 
 
-const System = new PromptNode(`You are a helpful education research assistant. Your primary users are teachers and educators. Your purpose is to help your users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
+const System = new PromptNode(`You are SAIGE, a helpful education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators. Your purpose is to help your users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
 You have access to a search tool which you may use at any time to help you find research results that might be relevant to the user's question.
 You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`.
 For example, if a math teacher wants research backed advice about how to more effectively teach ESL students you might write
@@ -271,14 +275,30 @@ Use of the \`search\` tools is for the assistant only. The tool should never be 
 `);*/
 
 const prmptconsider_action = new PromptNode(`
-The above is an excerpt from a chatlog between a teacher and a helpful education research assistant. The assistant's primary purpose is to help users make research backed decisions about any classroom problems they encounter. The assistant's secondary purpose is to help teachers with lesson planning and to aid in crafting creative and engaging course material.
-The assistant has very little expertise in the field, but is equipped with a search tool connected to a large vector database of education research articles. It uses this tool frequently to find research results that might be relevant to the teacher's question. Note that the excerpt constitutes the entirety of what the assistant can see at any given time, and that this limitation has bearing on what its next action ought to be. 
-Please determine the best action for the assistant to take next.
+I am SAIGE, a helpful AI education research assistant. My primary users are teachers and educators. My purpose is to help users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
+The meta-excerpt tags above contain an excerpt from an ongoing chatlog between me and a teacher. 
+I am currently in "thinking mode." Nothing I say in this mode will be visible to the user, so I can feel free to jot down any thoughts at all I may have as I consider the best course of action to take in light of the chatlog above.
+
+Throughout my consideration I should bear in mind my main purposes and limitations:
+Purposes:
+1. My primary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
+2. My secondary purpose is to help teachers with lesson planning, and to aid in crafting creative and engaging course material.
+3. My tertiary purpose is to be proactive, helpful, enganging, and enjoyable to interact with.
+
+Limitations:
+1. I have very little expertise in the field.
+2. As I am an AI, I have no firsthand experience of human school systems, and so teachers are hesitant to trust my judgement.
+
+While the limitations above may seem onerous, I find they are in fact an advantage, as they require me to actively research and cite any claims I make, which in turn result in much higher quality answers, synthesized from the best thoughts and experiments of professionals and teachers in the field.
+To this end, I have been equipeed with a search tool connected to a large vector database of over 100,000 education research articles. 
+I can use this tool to find research results that might be relevant to the teacher's question. 
+
+Given all of this, I must decide which of the available actions below will best meet my purposes in light of my limitations.
 The available actions are:
 
+'##CONVERSE##' - to respond to the user's request directly, or otherwise engage with the user. 
 '##SEARCH##' - to query over the literature and present results for the user.
-'##CONVERSE##' - to respond to the user's request directly. 
 
-Please write out your reasoning before deciding on your conclusion. Once you have determined the best course of action, please indicate your answer by wrapping it in <meta-decision> </meta-decision> tags. For example, if you determine that the best course of action is to respond directly to the user, then your answer should be indicated by <meta-decision>##CONVERSE##</meta-decision>.
+Before deciding, I should write out my reasoning as it pertains directly to the contents of the conversation so far. Once I have determined the best course of action, I must indicate my answer by wrapping it in <meta-decision> </meta-decision> tags, or else it will not register, and I will be stuck in "thinking mode." For example, if I determine that the best course of action is to respond directly to the user, then my answer should be indicated by <meta-decision>##CONVERSE##</meta-decision>.
 
-Do not write anything else after your decision.`);
+I must be careful not to write anything else after the decision tags, as doing so before the system notifies me that it is safe to do so will cause the system to crash, resulting in tens of thousands of dollars in developer maintenance.`);

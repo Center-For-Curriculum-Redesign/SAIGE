@@ -98,6 +98,7 @@ app.post('/prompt_internal', async (req, res) => {
     res.json(new_reply);
 
 // test code, with dummy response
+
 /*
     let resultNode = new convos.MessageHistories('assistant', '');
     resultNode.setIntendedParentNode(new_reply);
@@ -136,15 +137,17 @@ app.post('/prompt_internal', async (req, res) => {
         convo_tree.save(fs, filePath);
     }) ();
 */
+
 // real code, with asst response
 
     //save to disk after the assistant replies.
-    initAssistantResponseTo(assistant, new_reply, eventStreamer, 
+    initAssistantResponseTo(assistant, new_reply, 
         (genned_reply) => {
             const filePath = getConvoPath(convo_tree.conversationId);
             convo_tree.save(fs, filePath);
         }
     );
+
 });
 
 app.post('/chat_commands/:key', async (req, res) => {
@@ -291,6 +294,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
     let resultNode = new convos.MessageHistories('assistant', '');
     resultNode.setIntendedParentNode(responseTo);
     let data = resultNode.toJSON();
+    let streamer = event_streamers[responseTo.conversationId];
     streamer.broadcastEvent({
         event_name: 'asst_reply_init',
         messageuuid: data.messagenodeUuid,
@@ -302,7 +306,6 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         resultNode.setContent(commit_packet);
         let data = resultNode.toJSON();
         resultNode.setState('committed');
-        let currStream = event_streamers[responseTo.conversationId];
         if(commit_callback) {
             commit_callback(resultNode);
         }
@@ -326,10 +329,11 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
             textContent: data.textContent,
             fullPacket: resultNode.fullPacket,
             messageuuid: data.messagenodeUuid, 
-	        conversationId: data.conversationId
+	        conversationId: data.conversationId,
+	        alldata: data
         })
     };
-    asst.replyTo(responseTo);
+    asst.replyInto(responseTo);
 }
 
 async function checkServerAuth(req,res) {

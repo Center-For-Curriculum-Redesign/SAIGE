@@ -1,5 +1,6 @@
 import { MessageHistories, ThoughtHistories } from "../../chat_history.js";
 import { AnalysisNode, MatchFilter, PromptNode } from "../reasoning_prompts.js";
+import { queryEmbRequest } from "../../external_hooks/replicate_embeddings.js";
 
 const prmpt_searcher = new PromptNode(`
 The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search>relevant string here</meta-search>\`. You may submit multiple search requests at a time by responding with the format:

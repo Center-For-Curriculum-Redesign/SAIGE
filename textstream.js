@@ -22,7 +22,7 @@ const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
 const certificate = fss.readFileSync('tls/fullchain.pem', 'utf8');
 const credentials = { key: privateKey, cert: certificate };
-const ccrkey = fss.readFileSync('../server-vars/saige_key.txt', 'utf8');
+const ccrkey = process.env.CCR_KEY;
 const port = 3333;
 const httpsServer = createSecureServer(credentials, app);
 

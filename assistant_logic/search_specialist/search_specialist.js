@@ -1,5 +1,6 @@
 import { MessageHistories, ThoughtHistories } from "../../chat_history.js";
 import { AnalysisNode, MatchFilter, PromptNode } from "../reasoning_prompts.js";
+import { queryEmbRequest } from "../../external_hooks/replicate_embeddings.js";
 
 const prmpt_searcher = new PromptNode(`
 The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search>relevant string here</meta-search>\`. You may submit multiple search requests at a time by responding with the format:
@@ -80,6 +81,8 @@ export const searcher = new AnalysisNode(
                 model: model_name,
                 prompt: mergedStringInstruct,
                 min_p: 0.2,
+                temperature: 0.5, 
+                repetition_penalty: 1.1,
                 stream: true,
                 max_tokens: 800
             });
@@ -87,17 +90,39 @@ export const searcher = new AnalysisNode(
         let accumulated_raw = ''
         metasearchtags.reset();
         let filteredStream = metasearchtags.feed(stream, (chunk)=>{return chunk.choices[0].text || "";})
+        //TODO in Walter's UI: have this append a child thought node to whatever replyingInto happens to be
+        //instead of writing directly into the current thought node. 
+        let intoNode = null;
+        let search_head = "I'll imagine some hypothetical article text to maximize my odds of finding something: \n";
+        let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
+        if(activeThoughts > 0) {
+            intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]
+            search_head = intoNode.getContent() + "\n\n" + search_head;
+            intoNode.setContent(search_head, true);
+        }
         let search_queries = [];
         for await (const chunk of filteredStream) {
             let deltachunk = chunk.chunk;
             accumulated += deltachunk; 
-            
-            if(chunk.type == 'tagged' && chunk.accumulated) {
-                let splitted = chunk.parsed_result.split('\n');
-                for(let l of splitted) {
-                    if(l.length > 2) {
-                        search_queries.push(l);
-                        console.log("generating fake text: "+ l);
+           
+            if(chunk.type == 'tagged') {
+                if(intoNode != null) {
+                    intoNode.appendContent(deltachunk, true);
+                }
+                if(chunk.accumulated) {
+                    let splitted = chunk.parsed_result.split('\n');
+                    for(let l of splitted) {
+                        if(l.length > 2) {
+                            search_queries.push(l);
+                            if(intoNode != null) {
+                                let cleaned_search_string = "";
+                                for(let i = 0; i < search_queries.length; i++) {
+                                    cleaned_search_string += "\n--"+search_queries[i];
+                                }
+                                intoNode.setContent(search_head + cleaned_search_string +"\n", true);
+                            }
+                            console.log("generating fake text: "+ l);
+                        }
                     }
                 }
             }
@@ -117,6 +142,13 @@ export const searcher = new AnalysisNode(
                 for(let l in intagsplit) {
                     if(l.length>0 && search_queries.indexOf(l) == -1)
                         search_queries.push(l)
+                }
+                if(intoNode != null) {
+                    let cleaned_search_string = "";
+                    for(let i = 0; i < search_queries.length; i++) {
+                        cleaned_search_string += "\n--"+search_queries[i];
+                    }
+                    intoNode.setContent(search_head + cleaned_search_string +"\n", true);
                 }
             }
         }

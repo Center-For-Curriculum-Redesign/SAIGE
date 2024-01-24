@@ -1,5 +1,5 @@
+await import('dotenv/config');
 import express from 'express';
-
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,6 +16,8 @@ import {selfRagPromptInst} from './assistant_logic/selfrag/selfrag.js';
 import { createSecureServer } from 'http2';
 import http2Express from 'http2-express-bridge';
 import { ponderPromptInst } from './assistant_logic/basic/consider.js';
+import { getETA, heartbeatEmbedding } from './external_hooks/replicate_embeddings.js';
+
 const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
 const certificate = fss.readFileSync('tls/fullchain.pem', 'utf8');
@@ -23,6 +25,7 @@ const credentials = { key: privateKey, cert: certificate };
 const ccrkey = fss.readFileSync('../server-vars/saige_key.txt', 'utf8');
 const port = 3333;
 const httpsServer = createSecureServer(credentials, app);
+
 httpsServer.on('error', (err)=> {
     console.error('Server failed to start:', err);
 });
@@ -59,6 +62,7 @@ app.get('/chat/', async (req, res) => {
 })
 
 app.get('/chat/:key', async (req, res) => {
+    console.log(getETA())
     const key = req.params.key;
     let convo_tree = await find_load_make_convo(key, null);
     res.render('chat', { convo_tree });
@@ -346,11 +350,17 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         })
     };
 */
-   asst.replyInto(responseTo);
+    try {
+        asst.replyInto(resultNode);
+    } catch (e) {
+        resultNode.setContent("Sorry, I seem to have encountered an error. Maybe try again in a few minutes?", true);
+    }
 }
 
 async function checkServerAuth(req,res) {
 	if (req.header('Authorization') === 'Bearer '+ccrkey) return true;
 	res.status(401).send('Unauthorized request.');
 	return false;
-}
+        resultNode.setState('generating');
+        
+    }

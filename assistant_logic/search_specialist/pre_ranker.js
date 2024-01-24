@@ -4,6 +4,9 @@ import * as math from 'mathjs';
 import fss from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getSimilarEmbeddings } from "../../external_hooks/pg_accesss.js";
+import { getETA, getEmbeddings } from "../../external_hooks/replicate_embeddings.js";
+import { asyncInputTextGenfeedback } from "../../dummy_text.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,23 +33,41 @@ const runsearch = async (
          */
         me : this
     }) => {
-        let vec_embeds = {
-            queries: s.in_packets?.queries ?? [],
-            granularities : {}
-        };
-        let data = await fetch(endpoints_available["chroma_db"], 
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                body: JSON.stringify(vec_embeds)
-            });
-        let embedded_queries = (await data.json())?.queryEmbeddings;
+        let inputQueries = s.in_packets?.queries ?? [];
+        let intoNode = null;
+        let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
+        let search_head = ""
+        if(activeThoughts > 0) {
+            intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]
+            search_head = intoNode.getContent() + "\n\n";
+            let ETA = getETA();
+            if(ETA > 10000) {
+              let notice = asyncInputTextGenfeedback("Looks like the vector database is still waking up");
+              for await (char of notice) 
+                intoNode.appendContent(char, true);
+              let dots = asyncInputTextGenfeedback("...", duration=250);
+              for await (char of dots) 
+                intoNode.appendContent(char, true);
+              let estimate = asyncInputTextGenfeedback("says it'll be ready in "+parseInt(ETA));
+              for await (char of estimate) 
+                intoNode.appendContent(char, true);
+              let moredots = asyncInputTextGenfeedback("...", duration=250);
+              for await (char of moredots) 
+                intoNode.appendContent(char, true);
+              let complain = asyncInputTextGenfeedback("really need better hardware."); 
+              for await (char of complain) 
+                intoNode.appendContent(char, true);
+            }
+        }
+
+        let embedded_queries = await getEmbeddings(inputQueries)//(await data.json())?.queryEmbeddings;
         let query_selection_mode = s.in_packets?.search_queries?.query_selection_mode ?? 'dissimilarity';
         let ranked = [];       
         let n_queries = s.in_packets?.n_queries ?? embedded_queries.length;
-        if(query_selection_mode) { 
+        
+        
+
+        if(query_selection_mode) {          
             //we're not quite crazy enough to do a full dissimilarity selection, so we compute 
             //the average vector, and then select the vectors that are the furthest away from that average
             //without going further than 2 sigma.
@@ -72,8 +93,20 @@ const runsearch = async (
                 return false
             });
             ranked = no_outliers;
+           
         } else {
             ranked = ranked.slice(0, n_queries);
+        }
+        
+        if(intoNode != null) {
+            if(n_queries < embedded_queries.length) {
+              search_head = intoNode.getContent() + "\n\n" + "I should narrow these down . . .\n";
+              intoNode.setContent(search_head, true);
+              intoNode.appendContent("This is probably less repetitive:\n\n", true);
+              for (let entry of ranked) {
+                intoNode.appendContent("--"+inputQueries[entry.idx]+"\n\n", true);
+              }
+            }            
         }
 
         let filteredQ = {
@@ -86,15 +119,16 @@ const runsearch = async (
             },            
             query_vectors: ranked.map(r=>r.v)
         } 
-        let docsdata = await fetch(endpoints_available["chroma_db"], 
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-            body: JSON.stringify(filteredQ)
-        }); 
-        let doc_result = await docsdata.json();
+        let doc_result = await getSimilarEmbeddings(
+          filteredQ.query_vectors, 
+          {
+            "desc" : s.in_packets?.k_per_query ?? 0, 
+            "large" : s.in_packets?.k_per_query ?? 0, 
+            "medium" : s.in_packets?.k_per_query ?? 0, 
+            "small" : s.in_packets?.k_per_query ?? 0 
+          }
+        )
+        //let doc_result = await docsdata.json();
         let docs_by_granularity = {
             granularities: {
                 'desc' : doc_result['desc'],

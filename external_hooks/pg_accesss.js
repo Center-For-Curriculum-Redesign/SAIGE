@@ -18,7 +18,7 @@ const buildEmbeddingSimQuery = async (embeddings_list, granularities_obj, additi
 
   for (let embedding of embeddings_list) {
     for (let [granularity, top_k] of Object.entries(granularities_obj)) {
-      let queryText = `SELECT c.text_content, c.page_number, a.issn, a.title, a.peerreviewed, c.identifiersgeo, a.article_id, a.referencecount, a.granularity, FROM articles AS a, chunks_`+granularity+` AS c WHERE c.article_id = a.article_id`+append;
+      let queryText = `SELECT c.text_content, c.page_number, a.issn, a.title, a.peerreviewed, c.identifiersgeo, a.article_id, a.referencecount, a.granularity FROM articles AS a, chunks_`+granularity+` AS c WHERE c.article_id = a.article_id`+append;
       let queryParams = [pgvector.toSql(embedding), top_k];
       queryText += ` ORDER BY c.embedding <#> $1 LIMIT $2;`;
 
@@ -45,7 +45,7 @@ const executeQueries = async (queries) => {
 }
 
 export const getSimilarEmbeddings = async(embeddings_list, granularities_list, additionalFilters) => {
-  const queries = buildEmbeddingSimQuery(embeddings_list, granularities_list, additionalFilters)
-  const result = executeQueries(queries);
+  const queries = await buildEmbeddingSimQuery(embeddings_list, granularities_list, additionalFilters)
+  const result = await executeQueries(queries);
   return result;
 }

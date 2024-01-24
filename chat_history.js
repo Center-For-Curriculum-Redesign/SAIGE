@@ -289,14 +289,13 @@ export class MessageHistories {
             info = this.toJSON(); 
             info['prev_textContent'] = prevContent;
         } else {
-			info = this.toJSON(); 
-			info.deltaChunk = newContent; 
-/*            info = {
+			info = {
                 messagenodeUuid : this.messagenodeUuid,
                 conversationId : this.conversationId,
                 deltaChunk: newContent,
-                nodeType: getType(this)
-            }*/
+                nodeType: getType(this),
+                parentNodeUuid: this.parentNodeUuid 
+            }
         }
         if(this.on_content_change == null && this.conversation_node != null) {            
             this.conversation_node._on_textContent_change(info);

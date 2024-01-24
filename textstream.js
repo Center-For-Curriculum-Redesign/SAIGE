@@ -304,7 +304,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         event_name: 'asst_reply_init',
         messageuuid: data.messagenodeUuid,
         conversationId: data.conversationId,
-        responseTo: responseTo.toJSON().messagenodeUuid
+        responseTo: responseTo.toJSON().messagenodeUuid,
+        payload: resultNode.toJSON()
     })
     asst.on_commit = (commit_packet, byasst) => {
         responseTo.addChildReply(resultNode);
@@ -320,7 +321,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
             textContent:resultNode.textContent,
             messageuuid: data.messagenodeUuid,
          	conversationId: data.conversationId,
-         	responseTo: responseTo.toJSON().messagenodeUuid
+         	responseTo: responseTo.toJSON().messagenodeUuid,
+            payload: resultNode.toJSON()
        })
     };
 
@@ -334,7 +336,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
             messageuuid: data.messagenodeUuid, 
 	        conversationId: data.conversationId,
 	        state: data.state,
-	        responseTo: responseTo.toJSON().messagenodeUuid
+	        responseTo: responseTo.toJSON().messagenodeUuid,
+            payload: resultNode.toJSON()
         })
     };
 /*

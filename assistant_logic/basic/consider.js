@@ -40,7 +40,7 @@ export function ponderPromptInst(newAsst, endpoints_available) {
     //basic.setStartNodes(['ponderer']);
 
     basic.setTaskHintClientHandler('justrun', basic_gen);
-    basic.setTaskHintFormatter('justrun', new Formatter());
+    basic.setTaskHintFormatter('justrun', new Formatter(null,  known_formats[model_required]));
     basic.setTaskHintFormatter('inliner', new Formatter());
     basic.setTaskHintModel('justrun', model_required);
 

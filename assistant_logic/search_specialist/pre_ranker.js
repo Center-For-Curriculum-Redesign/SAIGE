@@ -40,22 +40,22 @@ const runsearch = async (
         if(activeThoughts > 0) {
             intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]
             search_head = intoNode.getContent() + "\n\n";
-            let ETA = getETA();
+            let ETA = await getETA();
             if(ETA > 10000) {
               let notice = asyncInputTextGenfeedback("Looks like the vector database is still waking up");
-              for await (char of notice) 
+              for await (let char of notice) 
                 intoNode.appendContent(char, true);
               let dots = asyncInputTextGenfeedback("...", duration=250);
-              for await (char of dots) 
+              for await (let char of dots) 
                 intoNode.appendContent(char, true);
               let estimate = asyncInputTextGenfeedback("says it'll be ready in "+parseInt(ETA));
-              for await (char of estimate) 
+              for await (let char of estimate) 
                 intoNode.appendContent(char, true);
               let moredots = asyncInputTextGenfeedback("...", duration=250);
-              for await (char of moredots) 
+              for await (let char of moredots) 
                 intoNode.appendContent(char, true);
               let complain = asyncInputTextGenfeedback("really need better hardware."); 
-              for await (char of complain) 
+              for await (let char of complain) 
                 intoNode.appendContent(char, true);
             }
         }

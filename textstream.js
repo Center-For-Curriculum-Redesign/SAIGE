@@ -22,7 +22,7 @@ const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
 const certificate = fss.readFileSync('tls/fullchain.pem', 'utf8');
 const credentials = { key: privateKey, cert: certificate };
-const ccrkey = fss.readFileSync('../server-vars/saige_key.txt', 'utf8');
+const ccrkey = process.env.CCR_KEY;
 const port = 3333;
 const httpsServer = createSecureServer(credentials, app);
 
@@ -304,7 +304,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         event_name: 'asst_reply_init',
         messageuuid: data.messagenodeUuid,
         conversationId: data.conversationId,
-        responseTo: responseTo.toJSON().messagenodeUuid
+        responseTo: responseTo.toJSON().messagenodeUuid,
+        payload: resultNode.toJSON()
     })
     asst.on_commit = (commit_packet, byasst) => {
         responseTo.addChildReply(resultNode);
@@ -320,7 +321,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
             textContent:resultNode.textContent,
             messageuuid: data.messagenodeUuid,
          	conversationId: data.conversationId,
-         	responseTo: responseTo.toJSON().messagenodeUuid
+         	responseTo: responseTo.toJSON().messagenodeUuid,
+            payload: resultNode.toJSON()
        })
     };
 
@@ -334,7 +336,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
             messageuuid: data.messagenodeUuid, 
 	        conversationId: data.conversationId,
 	        state: data.state,
-	        responseTo: responseTo.toJSON().messagenodeUuid
+	        responseTo: responseTo.toJSON().messagenodeUuid,
+            payload: resultNode.toJSON()
         })
     };
 /*

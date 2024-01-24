@@ -68,10 +68,10 @@ export const searcher = new AnalysisNode(
                 null,
                 false);
         let as_system = '<meta-excerpt>\n'+excerpt_text+'\n</meta-excerpt>'+prmpt_searcher.getContent();
-        dummy_user.setContent(as_system)
+        dummy_system.setContent(as_system)
         dummy_searcassist_role.setContent('Here are some searches:\n\n<meta-search> ')
         let roleInstruction = [
-            dummy_user,  
+            dummy_system,  
             dummy_searcassist_role            
         ];
 

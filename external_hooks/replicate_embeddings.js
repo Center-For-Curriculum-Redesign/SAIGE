@@ -1,3 +1,5 @@
+await import('dotenv/config');
+console.log(process.env.REPLICATE_API_TOKEN);
 import Replicate from "replicate";
 import fss from 'fs';
 import fs from 'fs/promises';
@@ -6,12 +8,14 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const replicate = new Replicate({
-    auth: ""+process.env.REPLICATE_API_TOKEN
+    auth: process.env.REPLICATE_API_TOKEN
 });
+var response_tracker = null;
 
 /**returns an esitmate of how long until the embedding endpoint becomes available*/
 export const getETA = async () => {
-    let response_tracker = JSON.parse(fss.readFileSync(path.join(__dirname,"last_response.json"), 'utf8'));
+    console.log("using key: "+ process.env.REPLICATE_API_TOKEN);
+    await maybeLoadResponseTracker();
     const currentTime = Date.now();
     const sinceLast = currentTime - response_tracker.last_response
     let ETA = 120000;
@@ -27,39 +31,31 @@ export const getETA = async () => {
         ETA = 130000
     }
     response_tracker.last_request = Date.now();
-    heartbeatEmbedding(()=>updateRsponseTracker(response_tracker));
+    heartbeatEmbedding(()=>updateRsponseTracker());
     return ETA;
 }
 
-const updateRsponseTracker = async (prior_tracker) => {
-    prior_tracker.prev_request = prior_tracker.last_request;
-    prior_tracker.prev_response = prior_tracker.last_response;
-    prior_tracker.last_response = Date.now();  
-    fs.writeFile(path.join(__dirname,"last_response.json"), JSON.stringify(prior_tracker));
+const updateRsponseTracker = async () => {
+    response_tracker.prev_request = response_tracker.last_request;
+    response_tracker.prev_response = response_tracker.last_response;
+    response_tracker.last_response = Date.now();  
+    await fs.writeFile(path.join(__dirname,"last_response.json"), JSON.stringify(response_tracker));
 }
 
 export const heartbeatEmbedding = async (oncomplete) => {    
-    await queryEmbRequest(['heartbeat']); 
+    await queryEmbRequest(['doki_doki']); 
     oncomplete()
 }
 
 export const getEmbeddings = async  (queries, granularities) => {
+    await maybeLoadResponseTracker();
+    const currentTime = Date.now();
+    response_tracker.last_request = Date.now();
     let results = {}
-    console.log("chromadb call for " +stringEmbs.length + " queries")
-    stringEmbs = [...await queryEmbRequest(queries)]
-    for(let k in granularities) {
-        let from_collection = collection_map[k];                    
-        results[k] = await from_collection.query(
-            {queryEmbeddings: stringEmbs, 
-            nResults: granularities[k]});
-        console.log("call complete")
-    }
-    results.queryEmbeddings = stringEmbs;
-    let asJSON = JSON.stringify(results);
-    //console.log(await resultfile.json())
-    return new Response(asJSON,  {headers: {
-        "Content-Type": "application/json",
-    }});
+    console.log("chromadb call for " +queries.length + " queries")
+    let stringEmbs = [...await queryEmbRequest(queries)]
+    updateRsponseTracker()
+    return stringEmbs;
 }
 
 export const queryEmbRequest = async (q_arr) => {
@@ -72,4 +68,20 @@ export const queryEmbRequest = async (q_arr) => {
           }
         });
     return result?.query_embeddings;
+}
+
+const maybeLoadResponseTracker = async () => {
+    if(response_tracker == null) {
+        try {
+            response_tracker = JSON.parse(await fs.readFileSync(path.join(__dirname,"last_response.json"), 'utf8'));
+        } catch(e){ 
+            response_tracker = {
+                prev_request: 0,
+                prev_response: 100000, 
+                last_request:  1000000,
+                last_response: 10000000
+            }
+            await fs.writeFile(path.join(__dirname,"last_response.json"), JSON.stringify(response_tracker));
+        }
+    }
 }

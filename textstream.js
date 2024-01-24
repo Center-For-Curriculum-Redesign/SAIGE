@@ -1,4 +1,4 @@
-import('dotenv/config');
+await import('dotenv/config');
 import express from 'express';
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
@@ -247,5 +247,9 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         resultNode.setState('generating');
         
     };*/
-    asst.replyInto(resultNode);
+    try {
+        asst.replyInto(resultNode);
+    } catch (e) {
+        resultNode.setContent("Sorry, I seem to have encountered an error. Maybe try again in a few minutes?", true);
+    }
 }

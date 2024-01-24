@@ -22,3 +22,21 @@ export async function* asyncIntGen(duration=100, maxIterations = Infinity) {
         yield resultPart;       
     }
 }
+
+
+
+export async function* asyncInputTextGenfeedback(inputText = "", duration=10, maxIterations = 1) {
+    let iteration = 0;
+    let increments = 0;   
+
+    while (iteration < maxIterations) {
+        await new Promise(resolve => setTimeout(resolve, duration));
+        increments += 1;
+        let char = (increments-1) % inputText.length;
+        let newchunk = inputText[char];
+        const resultPart = {choices: [{delta : {content : newchunk}}]};
+        if(increments % inputText.length == 0) 
+            iteration++;
+        yield resultPart;       
+    }
+}

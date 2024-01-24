@@ -127,7 +127,7 @@ export class Convo {
         let nodeInfo_uw = nodeInfo
         if(nodeInfo.changeType != null && nodeInfo.nodeInfo != null) {
             changeType_uw = nodeInfo.changeType;
-            nodeInfo_uw = nodeInfo.nodeInfo;            
+//            nodeInfo_uw = nodeInfo.nodeInfo;            
         }
         nodeInfo_uw.conversationId = this.conversationId;
         if(changeType != 'node_added' && changeType != 'node_removed') {

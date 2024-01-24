@@ -270,6 +270,7 @@ async function find_load_make_convo(key, res, make=true){
             event_name: 'content_change',
             payload: newNode.nodeInfo
         })
+
     }
     convo_tree.on_structure_change = (newNode)=> {
         let currStream = event_streamers[convo_tree.conversationId];
@@ -298,7 +299,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
     streamer.broadcastEvent({
         event_name: 'asst_reply_init',
         messageuuid: data.messagenodeUuid,
-        conversationId: data.conversationId
+        conversationId: data.conversationId,
+        responseTo: responseTo.toJSON().messagenodeUuid
     })
     asst.on_commit = (commit_packet, byasst) => {
         responseTo.addChildReply(resultNode);
@@ -319,21 +321,32 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
     };
 
     asst.on_state_change  = (generate_packet, byasst) => {
-        resultNode.textContent += generate_packet.delta_content;
-        resultNode.fullPacket = generate_packet;
-        resultNode.setState('generating');
+//        resultNode.textContent += generate_packet.delta_content;
+//        resultNode.fullPacket = generate_packet;
+//        resultNode.setState(generate_packet.changedVal);
         let data = resultNode.toJSON();
         streamer.broadcastEvent({
-            event_name: 'asst_reply_updated',
-            data: generate_packet.delta_content,
-            textContent: data.textContent,
-            fullPacket: resultNode.fullPacket,
+            event_name: 'asst_state_updated',
             messageuuid: data.messagenodeUuid, 
 	        conversationId: data.conversationId,
-	        alldata: data
+	        state: data.state,
+	        responseTo: responseTo.toJSON().messagenodeUuid
         })
     };
-    asst.replyInto(responseTo);
+/*
+    asst.on_generate  = (generate_packet, byasst) => {
+        resultNode.textContent += generate_packet.delta_content;
+//        resultNode.fullPacket = generate_packet;
+//        resultNode.setState(generate_packet.changedVal);
+        let data = resultNode.toJSON();
+        data.deltaChunk = generate_packet.delta_content;
+        streamer.broadcastEvent({
+            event_name: 'asst_reply_updated',
+            payload: data
+        })
+    };
+*/
+   asst.replyInto(responseTo);
 }
 
 async function checkServerAuth(req,res) {

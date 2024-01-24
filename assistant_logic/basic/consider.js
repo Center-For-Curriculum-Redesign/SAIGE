@@ -206,7 +206,7 @@ async function getThoughtResult(metaTrack, decideTrack, metaTagFilter, dummy_use
     for await (const typedChunk of filteredStream) {
         let deltachunk = typedChunk.chunk;
         chunkhist.push(typedChunk);
-        console.log(typedChunk.from_extraction);
+//        console.log(typedChunk.from_extraction);
         aggregated += deltachunk;
         s.assistant.setAmAnalyzing(true);
         currentThought.appendContent(deltachunk, true);

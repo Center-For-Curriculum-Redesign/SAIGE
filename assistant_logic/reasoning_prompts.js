@@ -157,11 +157,12 @@ export class AnalysisNode {
         this.container = cont;
     }
 
-    run(convo_branch, asst, packets, start_string, ongoing_gen) {
+    run(convo_branch, asst, packets, into_node = null, start_string, ongoing_gen,) {
         return this.buildfunc({
             prompt_coordinator : this.container, // ref to the prompt_coordinator issuing this analysis
             assistant :asst,
             convo_branch : convo_branch, //list of messagehistory objects representing just the current conversation prior to generation,
+            into_node : into_node, //the messagehistory node that output should go into (can be null if the AnlysisNode generates its own, or output is otherwise not intended to go into a node)
             string_start : start_string, //string formatted version of convo branch
             generated_text : ongoing_gen, //reference to the currently ongoing text generation,
             in_packets : packets,  //contains adhoc stuff the node might want

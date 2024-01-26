@@ -229,6 +229,7 @@ export class MessageHistories {
         let newThought = new ThoughtHistories(author, this.conversationId, this.conversation_node);
         this.thoughts[Object.keys(this.thoughts).length] = newThought;
         this.thoughtsByUuid[newThought.messagenodeUuid] = newThought;
+        newThought.setParentNode(this);
         newThought.thoughtType = "subThought";
         if(notify && this.conversation_node != null) {
             this.conversation_node._on_structure_change('node_added', newThought);
@@ -240,8 +241,17 @@ export class MessageHistories {
      * to this messagehistories thought map.
     */
     addThought(newThoughtNode, notify = false) {
-        newThoughtNode.setNodeId(`${Object.keys(this.thoughts).length}`);
-        this.thoughts[newThoughtNode.getNodeId()] = newThoughtNode;
+        let hereAlready = false;
+        for(let [k,v] in Object.entries(this.children)) {
+            if(v == newMessageNode){
+                hereAlready = true;
+            }
+            break;
+        }
+        if(hereAlready == false) {
+            newThoughtNode.setNodeId(`${Object.keys(this.thoughts).length}`);
+            this.thoughts[newThoughtNode.getNodeId()] = newThoughtNode;
+        }
         this.thoughtsByUuid[newThoughtNode.messagenodeUuid] = newThoughtNode;
         newThoughtNode.setParentNode(this);
         newThoughtNode.thoughtType = "subThought";
@@ -375,8 +385,17 @@ export class MessageHistories {
 
     addChildReply(newMessageNode, notify) {
         if(getType(newMessageNode) == getType(this)) {
-            newMessageNode.setNodeId(`${Object.keys(this.children).length}`);
-            this.children[newMessageNode.getNodeId()] = newMessageNode;
+            let hereAlready = false;
+            for(let [k,v] in Object.entries(this.children)) {
+                if(v == newMessageNode){
+                    hereAlready = true;
+                }
+                break;
+            }
+            if(hereAlready == false) {
+                newMessageNode.setNodeId(`${Object.keys(this.children).length}`);
+                this.children[newMessageNode.getNodeId()] = newMessageNode;
+            }
             newMessageNode.setParentNode(this);
             if(notify && this.conversation_node != null) {
                 this.conversation_node._on_structure_change('node_added', newMessageNode);

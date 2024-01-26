@@ -307,7 +307,8 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         responseTo: responseTo.toJSON().messagenodeUuid,
         payload: resultNode.toJSON()
     })
-    asst.on_commit = (commit_packet, byasst) => {
+    asst.on_commit = (commit_packet, byasst, throughNode) => {
+        let responseTo = throughNode?.parentNode ?? responseTo;
         responseTo.addChildReply(resultNode);
         responseTo.setPath(resultNode.getNodeId());
         resultNode.setContent(commit_packet);
@@ -326,10 +327,11 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
        })
     };
 
-    asst.on_state_change  = (generate_packet, byasst) => {
+    asst.on_state_change  = (generate_packet, byasst, throughNode) => {
 //        resultNode.textContent += generate_packet.delta_content;
 //        resultNode.fullPacket = generate_packet;
 //        resultNode.setState(generate_packet.changedVal);
+        let responseTo = throughNode?.parentNode ?? responseTo;
         let data = resultNode.toJSON();
         streamer.broadcastEvent({
             event_name: 'asst_state_updated',

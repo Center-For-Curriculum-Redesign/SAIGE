@@ -38,33 +38,33 @@ export class ASST {
         this.setAmAnalyzing(false)
     } */
 
-    commit(packet) {
-        this.setAmAnalyzing(false);
-        this.setAmGenerating(false); 
-        this.setStateHint('idle');
+    commit(packet, throughNode = this.replyingInto) {
+        this.setAmAnalyzing(false, throughNode);
+        this.setAmGenerating(false, throughNode); 
+        this.setStateHint('idle', throughNode);
         if(this.on_commit != null) {
-            this.on_commit(packet, this);
+            this.on_commit(packet, this, throughNode);
         }
     }
 
 
-    setStateHint(newState) {
+    setStateHint(newState, throughNode = this.replyingInto) {
         let oldStates = [...this.stateHints];
         this.stateHints = [newState];
         this._on_state_change({
                 oldStateHints : oldStates,
                 newStateHints : this.stateHints
-            })
+            }, throughNode)
     }
 
-    addStateHint(newState) {
+    addStateHint(newState, throughNode = this.replyingInto) {
         let oldStates = [...this.stateHints];
         this._not_idle();
         this.stateHints.append(newState);
         this._on_state_change({
                 oldStateHints : oldStates,
                 newStateHints : this.stateHints
-            });
+            }, throughNode);
     }
 
     _not_idle() {
@@ -76,31 +76,31 @@ export class ASST {
         }
     }
 
-    setAmAnalyzing(state) {
+    setAmAnalyzing(state, throughNode = this.replyingInto) {
         if(this.am_analyzing != state) {
             this.am_analyzing = state;
             this._not_idle();
-            this._on_state_change({changedVal : 'analyzing'}); 
+            this._on_state_change({changedVal : 'analyzing'}, throughNode); 
         }
     }
 
-    setAmGenerating(state) {
+    setAmGenerating(state, throughNode = this.replyingInto) {
         if(this.am_analyzing != state) {
             this.am_generating = state;
             this._not_idle();
-            this._on_state_change({changedVal : 'generating'});
+            this._on_state_change({changedVal : 'generating'}, throughNode);
         }
     }
 
-    _on_state_change(packet) {
+    _on_state_change(packet, throughNode = this.replyingInto) {
         if(this.on_state_change != null) {
-            this.on_state_change(packet, this);
+            this.on_state_change(packet, this, throughNode);
         }
     }
     
-    _on_generate(packet) {
+    _on_generate(packet, throughNode = this.replyingInto) {
         if(this.on_generate != null) {
-            this.on_generate(packet, this);
+            this.on_generate(packet, this, throughNode);
         }
     }
     setPromptCoordinator(prompt_coordinator) {

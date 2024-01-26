@@ -18,7 +18,7 @@ const buildEmbeddingSimQuery = async (embeddings_list, granularities_obj, additi
 
   for (let embedding of embeddings_list) {
     for (let [granularity, top_k] of Object.entries(granularities_obj)) {
-      let queryText = `SELECT c.text_content, c.page_number, a.issn, a.title, a.peerreviewed, c.identifiersgeo, a.article_id, a.referencecount, a.granularity FROM articles AS a, chunks_`+granularity+` AS c WHERE c.article_id = a.article_id`+append;
+      let queryText = `SELECT c.text_content, c.page_number, a.issn, a.title, a.peerreviewed, c.identifiersgeo, a.article_id, a.referencecount, c.granularity, (c.embedding <#> $1) * -1 AS distance FROM articles AS a, chunks_`+granularity+` AS c WHERE c.article_id = a.article_id`+append;
       let queryParams = [pgvector.toSql(embedding), top_k];
       queryText += ` ORDER BY c.embedding <#> $1 LIMIT $2;`;
 
@@ -31,10 +31,12 @@ const buildEmbeddingSimQuery = async (embeddings_list, granularities_obj, additi
 const executeQueries = async (queries) => {
   const client = await pool.connect();
   try {
-    let results = [];
+    let results = {};
     for (let query of queries) {
       const result = await client.query(query.text, query.values);
-      results.append(result);
+      if(result.rows.length > 0) {
+        results[result.rows[0]['granularity']] = result.rows;
+      }
     }
     return results;
   } catch (error) {

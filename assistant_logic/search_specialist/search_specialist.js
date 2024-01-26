@@ -41,11 +41,64 @@ const dummy_user = new MessageHistories('user');
 
 let metasearchtags = new MatchFilter(['<meta-search>'], ['</meta-search>']);
 
-export const searcher = new AnalysisNode( 
+
+export const aggregated_search = new AnalysisNode( 
     async (s={
     prompt_coordinator : null,// ref to the prompt_coordinator issuing this analysis
     assistant : null,//ref to assistant object
     convo_branch : null, //list of messagehistory objects representing just the current conversation prior to generation,
+    string_start : null, //string formatted version of convo branch,
+    into_node: null,
+    generated_text : null, //reference to the currently ongoing text generation,
+    in_packets : null, //contains adhoc stuff the node might want
+    me : this
+    }) => {
+        
+        s.assistant.setAmGenerating(true);
+        s.assistant.setAmAnalyzing(true);
+        let search_head = "I'll imagine some hypothetical article text to maximize my odds of finding something: \n\n";
+        let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
+        let intoNode = s.into_node;
+        if(activeThoughts > 0 && intoNode == null) {
+            intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]            
+        } else if (activeThoughts == 0 && intoNode == null) {
+            intoNode = convo_branch[convo_branch.length-1].newThought('assistant', true); 
+            intoNode.setContent(search_head);           
+        }
+        search_head = intoNode.getContent() + "\n\n" + search_head;
+        intoNode.setContent(search_head, true);
+
+        let c1node = intoNode.newThought('assistant', true);
+        let c2node = intoNode.newThought('assistant', true);
+        let c3node = intoNode.newThought('assistant', true);
+        let candidates1 = searcher.run(s.convo_branch, s.assistant, {}, c1node);
+        let candidates2 = searcher.run(s.convo_branch, s.assistant, {}, c2node);
+        let candidates3 = searcher.run(s.convo_branch, s.assistant, {}, c3node);
+        let results = await Promise.all([candidates1, candidates2, candidates3]);
+
+        let search_queries = []
+        for(let r of results) {
+            search_queries = [...search_queries, ...r.on_complete.search_queries];
+        }
+        return {
+            run_again: false, /*we're only using this to prepare a prompt, so running just once is fine. but you can 
+            have this return a json object to indicate the node should run again with that object as its input packets*/
+            on_complete: {commit : "", queries: search_queries}, //kv of nodes to trigger next iteration, where v is the packet to send from this node.          
+            modded_prompt: null, /* the prompt will be changed to this for all successive calls. 
+            Leave null if you want it to just keep doing its thing*/
+            request_model: null, //the model type to use for this prompt
+            result : accumulated
+        }
+    }
+
+);
+
+export const searcher = new AnalysisNode( 
+    async (s={
+    prompt_coordinator : null,// ref to the prompt_coordinator issuing this analysis
+    assistant : null,//ref to assistant object
+    convo_branch : null, //list of message and thought history objects representing just the current conversation prior to generation,
+    into_node: null, //messagehistory or thoughthistory node this should stream its output into
     string_start : null, //string formatted version of convo branch
     generated_text : null, //reference to the currently ongoing text generation,
     in_packets : null, //contains adhoc stuff the node might want
@@ -69,7 +122,7 @@ export const searcher = new AnalysisNode(
                 false);
         let as_system = '<meta-excerpt>\n'+excerpt_text+'\n</meta-excerpt>'+prmpt_searcher.getContent();
         dummy_system.setContent(as_system)
-        dummy_searcassist_role.setContent('Here are some searches:\n\n<meta-search> ')
+        dummy_searcassist_role.setContent('Here are some search terms:\n\n<meta-search> ')
         let roleInstruction = [
             dummy_system,  
             dummy_searcassist_role            
@@ -92,14 +145,8 @@ export const searcher = new AnalysisNode(
         let filteredStream = metasearchtags.feed(stream, (chunk)=>{return chunk.choices[0].text || "";})
         //TODO in Walter's UI: have this append a child thought node to whatever replyingInto happens to be
         //instead of writing directly into the current thought node. 
-        let intoNode = null;
-        let search_head = "I'll imagine some hypothetical article text to maximize my odds of finding something: \n";
-        let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
-        if(activeThoughts > 0) {
-            intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]
-            search_head = intoNode.getContent() + "\n\n" + search_head;
-            intoNode.setContent(search_head, true);
-        }
+        let intoNode = s.into_node;
+        
         let search_queries = [];
         for await (const chunk of filteredStream) {
             let deltachunk = chunk.chunk;
@@ -119,11 +166,13 @@ export const searcher = new AnalysisNode(
                                 for(let i = 0; i < search_queries.length; i++) {
                                     cleaned_search_string += "\n--"+search_queries[i];
                                 }
-                                intoNode.setContent(search_head + cleaned_search_string +"\n", true);
+                                intoNode.setContent(cleaned_search_string +"\n", true);
                             }
                             console.log("generating fake text: "+ l);
                         }
                     }
+                    if(search_queries.length >= 5) 
+                        break;
                 }
             }
             s.assistant._on_generate({
@@ -148,7 +197,7 @@ export const searcher = new AnalysisNode(
                     for(let i = 0; i < search_queries.length; i++) {
                         cleaned_search_string += "\n--"+search_queries[i];
                     }
-                    intoNode.setContent(search_head + cleaned_search_string +"\n", true);
+                    intoNode.setContent(cleaned_search_string +"\n", true);
                 }
             }
         }

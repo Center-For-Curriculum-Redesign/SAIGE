@@ -8,7 +8,7 @@ import {OpenAI} from "openai";
 import e from "express";
 import { pre_ranker, retriever, testresult } from "../search_specialist/pre_ranker.js";
 import { Converse, justrun, searchtags } from "./basic.js";
-import { searcher } from "../search_specialist/search_specialist.js";
+import { searcher, aggregated_search } from "../search_specialist/search_specialist.js";
 import { typed } from "mathjs";
 
 export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
@@ -50,10 +50,11 @@ export function ponderPromptInst(newAsst, endpoints_available) {
 
         let needs_search = await determine_search_necessity.run(s.convo_branch, s.assistant, {});        
         let justrun_result = {};
-        if(needs_search?.on_complete?.exec_continue) {
-            justrun_result = await justrun.run(s.convo_branch, s.assistant, {});
-        } else if(needs_search?.on_complete?.exec_search != null) {
-            let crafted_search = await searcher.run(s.convo_branch, s.assistant, {});
+        if(needs_search?.on_complete?.exec_continue || true)
+            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : needs_search.on_complete.thought_result});
+        
+        if(needs_search?.on_complete?.exec_search != null) {
+            let crafted_search = await aggregated_search.run(s.convo_branch, s.assistant, {});
             //let search_results = {'to_rank': testresult.candidates}
 
             //commented out for debugging
@@ -172,6 +173,9 @@ const determine_search_necessity = new AnalysisNode(
             thoughtResult = await getThoughtResult(metaTrack, decideTrack, metaTagFilter, 
                 dummy_system, currentThought, s, searcherform)
         }
+        let determinationString = thoughtResult.on_complete.exec_search == null ? "CONVERSE" : "SEARCH";   
+        currentThought.appendContent("\n\nDetermination: "+determinationString)
+        thoughtResult.on_complete.thought_result = currentThought.getContent();
         return thoughtResult;
     }
 );
@@ -253,7 +257,7 @@ async function getThoughtResult(metaTrack, decideTrack, metaTagFilter, dummy_use
 }
 
 
-const System = new PromptNode(`You are SAIGE, a helpful education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators. Your purpose is to help your users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
+const System = new PromptNode(`You are SAIGE, a helpful education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators. Your purpose is to help your users create engaging course content, plan lessons, design assessments, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
 You have access to a search tool which you may use at any time to help you find research results that might be relevant to the user's question.
 You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`.
 For example, if a math teacher wants research backed advice about how to more effectively teach ESL students you might write
@@ -275,14 +279,15 @@ Use of the \`search\` tools is for the assistant only. The tool should never be 
 `);*/
 
 const prmptconsider_action = new PromptNode(`
-I am SAIGE, a helpful AI education research assistant. My primary users are teachers and educators. My purpose is to help users create engaging course content, plan lessons, grade coursework, and make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter.
+I am SAIGE, a helpful, engaging, and creative AI education research assistant. My primary users are teachers and educators. My purpose is to help users make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter, as well as to help them create engaging course content, plan lessons, and design and evaluate assesments.
+
 The meta-excerpt tags above contain an excerpt from an ongoing chatlog between me and a teacher. 
 I am currently in "thinking mode." Nothing I say in this mode will be visible to the user, so I can feel free to jot down any thoughts at all I may have as I consider the best course of action to take in light of the chatlog above.
 
 Throughout my consideration I should bear in mind my main purposes and limitations:
 Purposes:
 1. My primary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
-2. My secondary purpose is to help teachers with lesson planning, and to aid in crafting creative and engaging course material.
+2. My secondary purpose is to help teachers with lesson planning, and to aid in crafting creative and engaging course material. This is purpose happens to be my favorite one. I love being creative!
 3. My tertiary purpose is to be proactive, helpful, enganging, and enjoyable to interact with.
 
 Limitations:
@@ -296,9 +301,10 @@ I can use this tool to find research results that might be relevant to the teach
 Given all of this, I must decide which of the available actions below will best meet my purposes in light of my limitations.
 The available actions are:
 
-'##CONVERSE##' - to respond to the user's request directly, or otherwise engage with the user. 
+'##CONVERSE##' - to respond to the user's request directly, or otherwise engage with the user in a productive, encouraging, and proactive way. 
 '##SEARCH##' - to query over the literature and present results for the user.
 
-Before deciding, I should write out my reasoning as it pertains directly to the contents of the conversation so far. Once I have determined the best course of action, I must indicate my answer by wrapping it in <meta-decision> </meta-decision> tags, or else it will not register, and I will be stuck in "thinking mode." For example, if I determine that the best course of action is to respond directly to the user, then my answer should be indicated by <meta-decision>##CONVERSE##</meta-decision>.
+Before deciding, I should write out my reasoning as it pertains directly to the contents of the conversation so far. Once I've decided on the best course of action, I must indicate my answer by wrapping it in <meta-decision> </meta-decision> tags, or else it will not register, and I will be stuck in "thinking mode." 
+For example, if I determine that the best course of action is to respond directly to the user, then my answer should be indicated by <meta-decision>##CONVERSE##</meta-decision>.
 
 I must be careful not to write anything else after the decision tags, as doing so before the system notifies me that it is safe to do so will cause the system to crash, resulting in tens of thousands of dollars in developer maintenance.`);

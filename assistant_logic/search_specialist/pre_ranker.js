@@ -33,6 +33,8 @@ const runsearch = async (
          */
         me : this
     }) => {
+        s.assistant.setAmGenerating(true);
+        s.assistant.setAmAnalyzing(true);
         let inputQueries = s.in_packets?.queries ?? [];
         let intoNode = null;
         let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
@@ -44,19 +46,19 @@ const runsearch = async (
             if(ETA > 10000) {
               let notice = asyncInputTextGenfeedback("Looks like the vector database is still waking up");
               for await (let char of notice) 
-                intoNode.appendContent(char, true);
-              let dots = asyncInputTextGenfeedback("...", duration=250);
+                intoNode.appendContent(char.choices[0].delta.content, true);
+              let dots = asyncInputTextGenfeedback("...", 250);
               for await (let char of dots) 
-                intoNode.appendContent(char, true);
-              let estimate = asyncInputTextGenfeedback("says it'll be ready in "+parseInt(ETA));
+                intoNode.appendContent(char.choices[0].delta.content, true);
+              let estimate = asyncInputTextGenfeedback("says it'll be ready in "+parseInt(ETA/1000)+" seconds");
               for await (let char of estimate) 
-                intoNode.appendContent(char, true);
-              let moredots = asyncInputTextGenfeedback("...", duration=250);
+                intoNode.appendContent(char.choices[0].delta.content, true);
+              let moredots = asyncInputTextGenfeedback("...", 250);
               for await (let char of moredots) 
-                intoNode.appendContent(char, true);
+                intoNode.appendContent(char.choices[0].delta.content, true);
               let complain = asyncInputTextGenfeedback("really need better hardware."); 
               for await (let char of complain) 
-                intoNode.appendContent(char, true);
+                intoNode.appendContent(char.choices[0].delta.content, true);
             }
         }
 
@@ -128,15 +130,24 @@ const runsearch = async (
             "small" : s.in_packets?.k_per_query ?? 0 
           }
         )
+
+        let all_results_string = "\n\nHere's a peek of the results I found. Give me a moment while I read through them: \n\n'";
+        
+        for(let descres of doc_result['desc']) {
+          all_results_string += '**'+descres.title +"**\n" +descres.text_content+'\n\n';
+        }
+        
+        let notice = asyncInputTextGenfeedback(all_results_string, duration = 1);
+        for await (let char of notice) 
+          intoNode.appendContent(char.choices[0].delta.content, true);
         //let doc_result = await docsdata.json();
         let docs_by_granularity = {
             granularities: {
                 'desc' : doc_result['desc'],
                 'large' : doc_result['large'],
-                'medium' : doc_result['medium'],
-                'small' : doc_result['small']
+                'medium' : doc_result['medium']
             },
-            query_embeddings: doc_result.queryEmbeddings
+            query_embeddings: query_vectors
         }
         
 

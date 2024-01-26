@@ -156,10 +156,14 @@ button.edit-pencil-button {
 
 .thought-node > .self-content {
     font-size: 0.7em;
-    grid-template-columns: auto;
+    /* grid-template-columns: auto; */
     overflow: scroll;
-    height: 77vh;
+    min-height: 200px;
+    max-height: 76vh;
     scroll-margin: 5px;
+    display: block;
+    overflow-x: clip;
+    width: 100%;
     padding-left: 0.5em;
     padding-right: 0.5em;
 }
@@ -240,6 +244,7 @@ textarea.general-input-text {
     grid-column-start: 1;
     grid-column-end: 3;
     width: 100%;
+    overflow-x: clip;
     grid-row: 2;
 }
 
@@ -371,7 +376,7 @@ button.edit-pencil-button {
     background: #baa9bb;
     width: 30vw;
     position: fixed;
-    right: 0px;
+    right: 13px;
     top: 0px;
     filter: drop-shadow(#0008 0px 0px 9px);
     border-radius: 20px;
@@ -428,5 +433,5 @@ button.edit-pencil-button {
 .thought-content {
     /*! overflow: unset; */
     display: block;
-    max-width: 43em;
+    max-width: 29vw;
   }

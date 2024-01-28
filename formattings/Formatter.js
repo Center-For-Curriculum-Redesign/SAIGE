@@ -13,10 +13,10 @@ export class Formatter {
             if (m.getAuthor() == null && m.getContent() == null) {
                 continue; //empty root node
             }
-            formatted += `${this.determineFormat()['pre_role'][m.getAuthor()] ?? ''}` +
-                `${this.determineFormat()['role_strings'][m.getAuthor()]?? ''}` +
-                `${m.getContent()}` + 
-                `${m.getState() != 'committed' ? '' : this.determineFormat()['post_role'][m.getAuthor()]}`;
+            formatted += this.determineFormat()['pre_role'][m.getAuthor()] ?? '';
+            formatted += this.determineFormat()['role_strings'][m.getAuthor()]?? '';
+            formatted += m.getContent();
+            formatted += m.getState() != 'committed' ? this.determineFormat()['post_role'][m.getAuthor()] : '';
         }
 
         if (systemPrompt) {
@@ -39,7 +39,7 @@ export class Formatter {
             if (m.getAuthor() == null && m.getContent() == null) {
                 continue; //empty root node
             }
-            if (lastRole === m.getAuthor()) {
+            if (lastRole === m.getAuthor() && messageDictList.length >i) {
                 messageDictList[i].content += `\n---\n ${m.getContent()}`;
             } else {
                 messageDictList.push({

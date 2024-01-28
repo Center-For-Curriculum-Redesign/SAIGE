@@ -16,6 +16,17 @@ function cancelEdit(button) {
     showElem(wrapper.querySelector(".submitted-text-container"));
 }
 
+function cancelRequest(button) {
+    const wrapper = button.closest(".self-content");
+    const messageDomnode = wrapper.closest(".message-node");    
+    let msgObj = messageDomnode.asObj;
+    let activeReply = {
+        replyingTo: msgObj.parentNode.messagenodeUuid,
+        conversationId: convoTree.conversationId
+    }
+    const result = xRq(activeReply, default_endpoint+'/cancel_request');
+}
+
 async function altReply(button) {
     const wrapper = button.closest(".self-content");
     const editContainer = button.closest(".edit-container");    

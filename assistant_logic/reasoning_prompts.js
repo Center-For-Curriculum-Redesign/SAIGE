@@ -1,5 +1,9 @@
 import { Formatter } from '../formattings/Formatter.js';
 import { asyncIntGen } from "../dummy_text.js";
+import { name } from 'ejs';
+import { chain, i } from 'mathjs';
+import { text } from 'express';
+import { ObjectDetectionPipeline } from '@xenova/transformers';
 
 /**
 * maintains a loose collection of PromptNodes and Analysis nodes that may reference one another. 
@@ -90,7 +94,7 @@ export class PromptCoordinator{
         return this.modelTaskHints[taskhintname];
     }
     matchFilterFor(taskhintname) {
-        return this.matchfilterTaskHints[taskhintname];
+        return this.matchfilterTaskHints[taskhintname].clone();
     }
 
     /**
@@ -105,9 +109,8 @@ export class PromptCoordinator{
     }
 
     /**returns the text for the prompt of the given name */
-    getPrompt(promptname){
-        return this.prompt_nodes[promptname].getContent();
-
+    getPrompt(promptname, template_literals=null){
+        return this.prompt_nodes[promptname].getContent(template_literals);
     }
     /**
      * expects named key value pairs of AnalysisNode names and 
@@ -157,11 +160,12 @@ export class AnalysisNode {
         this.container = cont;
     }
 
-    run(convo_branch, asst, packets, start_string, ongoing_gen) {
+    run(convo_branch, asst, packets, into_node = null, start_string, ongoing_gen,) {
         return this.buildfunc({
             prompt_coordinator : this.container, // ref to the prompt_coordinator issuing this analysis
             assistant :asst,
             convo_branch : convo_branch, //list of messagehistory objects representing just the current conversation prior to generation,
+            into_node : into_node, //the messagehistory node that output should go into (can be null if the AnlysisNode generates its own, or output is otherwise not intended to go into a node)
             string_start : start_string, //string formatted version of convo branch
             generated_text : ongoing_gen, //reference to the currently ongoing text generation,
             in_packets : packets,  //contains adhoc stuff the node might want
@@ -171,13 +175,52 @@ export class AnalysisNode {
 }
 
 export class PromptNode {
-    constructor(content, promptsContainer = null) {
+    /**
+     * 
+     * @param {*} content The prompt. Supports template literals which can be provided as kv pairs in the template_literals object
+     * @param {*} promptsContainer 
+     * @param {*} template_literals kv pairs of template literals to inject into the string. If your string is "Hello ${mood} world", then your obj should contain {mood : 'cruel'}
+     */
+    constructor(content, promptsContainer = null, template_literals = null) {
+        if (typeof content !== 'string') {
+            throw new Error('Content must be a string.');
+        }
+        if (template_literals != null && typeof template_literals !== 'object' || Array.isArray(template_literals)) {
+            throw new Error('Template literals must be provided as an object.');
+        }
         this.content = content;
         this.container = promptsContainer;
+        this.tl = template_literals || {};
+        let tempContent = content.substring(0);
+        tempContent = tempContent.replace(/\$\{(\w+)\}/g, (match, key) => {
+            if (key in this.tl) {
+                return this.tl[key];
+            } else {
+                console.warn(`Key '${key}' not found in template literals.`);
+                return 'null';
+            }
+        });
     }
 
-    getContent() {
+    getRawContent() {
         return this.content;
+    }
+
+    getContent(template_literals = null) {
+        if (template_literals != null) {
+            if(typeof template_literals !== 'object' || Array.isArray(template_literals)) {
+                throw new Error('Template literals must be provided as an object.');
+            }
+            this.tl = template_literals;
+        }
+        return this.content.replace(/\$\{(\w+)\}/g, (match, key) => {
+            if (key in this.tl) {
+                return this.tl[key];
+            } else {
+                console.warn(`Key '${key}' not found in template literals.`);
+                return 'null';
+            }
+        });
     }
 
     setContainer(cont) {
@@ -186,28 +229,198 @@ export class PromptNode {
 
 }
 
-/**
- * takes chunks of input text, returns the text chunk by input chunk in a wrapper object indicating 
- * which of the delimiter strings that text appears between.
- * 
- * initialize with .init() every time you use it for a new stream.
- */
-export class MatchFilter {
+export class WrapFilter {
     /**
-     * 
-     * @param {String || Array(String)} start criteria by which to determine parsing match start for a text stream
-     * @param {String || Array(String)} end criteria by which to determine parsing match end for a text stream
+     * @param {String} name an identifying name by which to be notified that text is occurring within this wrapFilter
+     * @param {String || Array(String)} startTags criteria by which to determine parsing match start for a text stream
+     * @param {String || Array(String)} startTags criteria by which to determine parsing match end for a text stream
+     * @param {boolean} holdunclosed if true, will withold output inside of tags until the tag has been closed. 
      */
-    constructor(start, end) {
-        this.startmatches = start;
-        this.endmatches = end;
-        this.matchtrack = new MatchOnTrack(this.startmatches, this.endmatches);
-        this.active_track = this.matchtrack
+    constructor(name, startTags, endTags, holdunclosed = false) {
+        this.raw_wrapf = new RawWrapFilter(name, startTags, endTags)
+        this.holdunclosed = holdunclosed
+        this.wrappedAccumulation = '';
     }
 
     reset() {
-        this.matchtrack.reset();
-        this.active_track = this.matchtrack
+        this.raw_wrapf.reset();
+    }
+
+    clone() {
+        return new WrapFilter(this.raw_wrapf.name, this.raw_wrapf.startTags, this.raw_wrapf.endTags, this.holdunclosed);
+    }
+
+    get name() { return this.raw_wrapf.name;}
+
+    *processChunk(chunk) { 
+        let isAccumulating = false;
+        for(let w of this.raw_wrapf.processChunk(chunk)) {
+            if(this.holdunclosed && w.exactTag != null) {         
+                if( w.justExited) {
+                    w.text = this.wrappedAccumulation + w.text; 
+                    this.wrappedAccumulation = '';
+                    yield w;                 
+                } else {
+                    this.wrappedAccumulation += w.text;
+                }                
+            } else {
+                yield w;
+            }
+        }
+    }
+}
+
+class RawWrapFilter {
+    /**
+     * @param {String} name an identifying name by which to be notified that text is occurring within this wrapFilter
+     * @param {String || Array(String)} startTags criteria by which to determine parsing match start for a text stream
+     * @param {String || Array(String)} startTags criteria by which to determine parsing match end for a text stream
+     * */
+    constructor(name, startTags, endTags) {
+        this.startTags = !Array.isArray(startTags) ? [startTags] : startTags
+        this.endTags= !Array.isArray(endTags) ? [endTags] : endTags
+        this.buffer = '';
+        this.name = name;
+        this.insideTag = false;
+        this.currentTag = null;
+    }
+    reset() {
+        this.buffer = '';
+        this.insideTag = false;
+        this.currentTag = null;
+    }
+
+    clone() {
+        return new RawWrapFilter(this.name, this.startTags, this.endTags);
+    }
+
+    *processChunk(chunk) {
+        this.buffer += chunk;
+
+        let startIndex = 0;
+        while (startIndex < this.buffer.length) {
+            if (!this.insideTag) {
+                const { index: startTagIndex, tag: startTag } = this.findEarliestTag(this.buffer.substring(startIndex), this.startTags);
+                if (startTagIndex !== -1) {
+                    this.currentTag = startTag;
+                    let startres =  { text: this.buffer.substring(startIndex, startIndex + startTagIndex), 
+                        activeTag: this.name, exactTag: this.currentTag, justEntered: true, 
+                        justExited: false, isPartialTag: false, isCompleteTag: true};
+                    yield startres;
+                    startIndex += startTagIndex + startTag.length;
+                    this.insideTag = true;
+                    if(startIndex == this.buffer.length) {
+                        this.buffer = '';
+                        break;
+                    }                    
+                } else {
+                    let partialTagIndex = this.findPartialTag(this.buffer.substring(startIndex), this.startTags);
+                    if (partialTagIndex !== -1) {
+                        if(startIndex != partialTagIndex) {
+                            let partialOut = { text: this.buffer.substring(startIndex, startIndex + partialTagIndex), 
+                                    activeTag: this.name, exactTag: this.currentTag, justEntered: false, 
+                                    justExited: false, isPartialTag: true, isCompleteTag: false };                            
+                            yield partialOut;
+                        }
+                        this.buffer = this.buffer.substring(startIndex + partialTagIndex);
+                        break;
+                    }
+                    yield { text: this.buffer.substring(startIndex), 
+                        activeTag: null, exactTag : null, justEntered: false, 
+                        justExited: false,  isPartialTag: false, isCompleteTag: false};
+                    this.buffer = '';
+                    break;
+                }
+            }
+            if(this.insideTag) {
+                const { index: endTagIndex, tag: endTag } = this.findEarliestTag(this.buffer.substring(startIndex), this.endTags);
+                if (endTagIndex !== -1) {
+                    let endres = {text: this.buffer.substring(startIndex, startIndex + endTagIndex), 
+                        activeTag: this.name, exactTag: this.currentTag, justEntered: false, 
+                        justExited: true, isPartialTag: false, isCompleteTag: true};
+                    yield endres;
+                    startIndex += endTagIndex + endTag.length;                    
+                    this.insideTag = false;
+                    this.currentTag = null;
+                    if(startIndex == this.buffer.length) {
+                        this.buffer = '';
+                        break;
+                    }
+                } else {
+                    let partialTagIndex = this.findPartialTag(this.buffer.substring(startIndex), this.endTags);
+                    if (partialTagIndex !== -1) {
+                        if(startIndex != partialTagIndex) {
+                            let partialOut = { text: this.buffer.substring(startIndex, startIndex + partialTagIndex), 
+                                activeTag: this.name,  exactTag: this.currentTag, justEntered: false, 
+                                justExited: false, isPartialTag: true, isCompleteTag: true};
+                            yield partialOut;
+                        }
+                        this.buffer = this.buffer.substring(startIndex + partialTagIndex);
+                        break;
+                    }
+                    yield { text: this.buffer.substring(startIndex), 
+                        activeTag: this.name, exactTag: this.currentTag, justEntered: false, 
+                        justExited: false, isPartialTag: false, isCompleteTag: false};
+                    this.buffer = '';
+                    break;
+                }
+            }
+        }
+    }
+
+    findEarliestTag(text, tags) {
+        let earliestIndex = -1;
+        let foundTag = null;
+        tags.forEach(tag => {
+            const index = text.indexOf(tag);
+            if (index !== -1 && (earliestIndex === -1 || index < earliestIndex)) {
+                earliestIndex = index;
+                foundTag = tag;
+            }
+        });
+        return { index: earliestIndex, tag: foundTag };
+    }
+
+    findPartialTag(text, tags) {
+        for (let tag of tags) {
+            for (let i = 1; i < tag.length; i++) {
+                if (text.endsWith(tag.substring(0, i))) {
+                    return text.length - i;
+                }
+            }
+        }
+        return -1;
+    }
+}
+
+/**
+ * takes chunks of input text, returns the text chunk by input chunk in a wrapper object indicating 
+ * which of the WrapFilter delimiter strings that text appears between.
+ * 
+ * initialize with .init() every time you use it for a new stream.
+ */
+export class FilteredFeed {
+    /**
+     * @param {WrapFilter || Array[WrapFiler]} filters a WrapFilter or array of WrapFilters this feed will parse input through
+     */
+    constructor(filters) {
+        this.candidatefilters = Array.isArray(filters) ? filters : [filters];
+        this.activeFilter = null
+    }
+
+    reset() {
+        this.activeFilter = null
+        for(let f of this.candidatefilters) {
+            f.reset();
+        }
+    }
+
+    clone() {
+        let filterClones = [];
+        for(let f of this.candidatefilters) {
+            filterClones.push(f.clone());
+        }
+        return new FilteredFeed(filterClones);
     }
 
     /**
@@ -216,20 +429,63 @@ export class MatchFilter {
      * and also let us do equality checks by vague intent.
      * @returns 
      */
-    getTrack() {
-        return this.active_track;
+    getFilterByName(name) {
+        for(let cf of this.candidatefilters) {
+            if(cf.name == activeFilterName) {
+                return cf;
+            }
+        }
+        return null;
+    }
+    
+   
+    /**
+     * note, this is a naive setter and doesn't make any assumotions about
+     * the state of the provided filters
+     * @param {} WrapFilter 
+     */
+    setActiveFilter(wrapfilter) {
+        this.activeFilter = wrapfilter;
+    }
+
+    popActiveFilter(filterNameChain) {
+        let activeFilterName = this.filterNameChain.pop();
+        this.activeFilter = getFilterByName(activeFilterName);
+    }
+
+    *throughActiveFilter(textChunk, filterlist = this.candidatefilters) {
+        let allResults = {}        
+        let result = null;            
+        let cf =  filterlist[0];
+        let subfilt = filterlist.slice(1);                
+        for(let subchunk of cf.processChunk(textChunk)) {
+            result = subchunk;
+            result.activeTags = result.activeTag != null ? [result.activeTag] : []
+            result.exactTags = result.exactTag != null ? [result.exactTag] : []
+            result.isPartialTags = result.isPartialTag ? [cf.name] : [];
+            result.isCompleteTags = result.isCompleteTags ? [cf.name] : [];
+            result.justEnteredTag = result.justEntered ? cf.name : null;
+            result.justExitedTag = result.justExited ? cf.name : null;
+            
+            if(subfilt.length > 0 ) {
+                let subresultsProcess = this.throughActiveFilter(subchunk.text, subfilt);
+                for(let subresults of subresultsProcess) {
+                    result.text = subresults.text
+                    result.activeTags = [...result.activeTags, subresults.activeTags]
+                    result.exactTags = [...result.exactTags, subresults.exactTags]
+                    result.isPartialTags = [...result.isPartialTags, subresults.isPartialTags]
+                    result.isCompleteTags = [...result.isCompleteTags, subresults.isCompleteTags]
+                    result.justEnteredTag = result.justEntered ? result.name : subresults.justEnteredTag;
+                    result.justExitedTag = result.justXited ? result.name : subresults.justEnteredTag;
+                    yield result; 
+                }
+            } else {
+                yield result
+            }
+        }     
     }
 
     /**
-     * note, this is a naive setter and doesn't make any assumotions about
-     * the state of the provided matchtrack.
-     * @param {} matchTrack 
-     */
-    setTrack(matchTrack) {
-        this.active_track = matchTrack;
-    }
-
-     /**
      * 
      * @param {stream} stream
      * @param {function} extractor callback that takes whatever the stream is giving and extracts the text chunk
@@ -238,323 +494,23 @@ export class MatchFilter {
      * will return all of the withheld text as a full sequence once the closing tag is noticed.
      * type: str// one of 'display' if outside of matching tag, or 'tagged' if within a matching tag.
      */
-     async * feed(streamin, extractor) {
-        let accumulated_startbase = '';
-        let accumulated_tagbase = '';
-        let accumulated_raw = '';
-        let accumulated_raw_chunks = []
+    async * feed(streamin, extractor = this.defaultExtractor) {        
         this.reset();
+        console.log("reset")
+        this.debug = [];
         //let stream = await streamin();
         for await (const chunk of streamin) {
+            this.debug.push(chunk);
             let deltachunk = extractor(chunk); 
-            let parser = this.active_track;           
-            let typedChunks = this.feedOne(deltachunk);
-            accumulated_raw += deltachunk;
-            accumulated_raw_chunks.push(deltachunk)
-            if(typedChunks.prevstate <= TAG_INNER && typedChunks.base_text != null) {
-                let thischunk = typedChunks.base_text||'';
-                accumulated_startbase += thischunk; 
-                yield {
-                    chunk: thischunk, 
-                    type: 'base', 
-                    accumulated: false,
-                    from_extraction : deltachunk,
-                    raw_aggregate : accumulated_raw,
-                    raw_chunk_aggregate : accumulated_raw_chunks,
-                    criteria_index_triggered : typedChunks.criteriaIndex,
-                    current_matchtrack: parser
-                }
-                
-            }
-
-            if(typedChunks.state == TAG_INNER && typedChunks.criteriaIndex >-1 && typedChunks.prevstate < TAG_INNER) {
-                let thischunk = typedChunks.base_text||'';
-                yield {
-                    parsed_result: accumulated_startbase,
-                    chunk: thischunk,
-                    type: 'base', 
-                    accumulated: true,
-                    from_extraction : deltachunk,
-                    raw_aggregate : accumulated_raw,
-                    raw_chunk_aggregate : accumulated_raw_chunks,
-                    raw_chunk : chunk,
-                    criteria_index_triggered : typedChunks.criteriaIndex,
-                    criteria_name_triggered : typedChunks.criteria_name_triggered,
-                    current_matchtrack: parser
-                    
-                }
-                accumulated_startbase='';
-            }
-           
-            if(typedChunks.prevstate >= TAG_INNER && typedChunks.state <= POST_TAG) {
-                let thischunk = typedChunks.tagged_text||'';
-                accumulated_tagbase += thischunk; 
-                yield {
-                    chunk: thischunk, 
-                    type: 'tagged', 
-                    accumulated: false,
-                    from_extraction : deltachunk,
-                    raw_aggregate : accumulated_raw,
-                    raw_chunk_aggregate : accumulated_raw_chunks,
-                    raw_chunk : chunk,
-                    criteria_index_triggered : typedChunks.criteriaIndex,
-                    current_matchtrack: parser
-                }
-                if(typedChunks.state >= POST_TAG) {
-                    let result = {
-                        chunk: thischunk,
-                        parsed_result: accumulated_tagbase, 
-                        type: 'tagged', 
-                        accumulated: true,
-                        from_extraction : deltachunk,
-                        raw_aggregate : accumulated_raw,
-                        raw_chunk_aggregate : accumulated_raw_chunks,
-                        raw_chunk : chunk,
-                        criteria_index_triggered : typedChunks.criteriaIndex,
-                        criteria_name_triggered : typedChunks.criteria_name_triggered,
-                        current_matchtrack: parser
-                    }
-                    this.reset()
-                    yield result;
-                    accumulated_tagbase = '';                    
-                }
+            process.stdout.write(deltachunk) 
+            for (let subchunk of this.throughActiveFilter(deltachunk)) {
+                let result = {raw_chunk: chunk, ...subchunk}
+                yield result
             }
         }        
     }
 
-    /**
-     * 
-     * @param {string} textchunk 
-     * @returns /{
-     * filtered_chunk: str,// the input textchunk if it is safe to return, or empty string if a start tag has been matched.
-     * will return all of the withheld text as a full sequence once the closing tag is noticed.
-     * type: str// one of 'display' if outside of matching tag, or 'tagged' if within a matching tag.
-     */
-    feedOne(textchunk) {
-        return this.active_track.buildMatch(textchunk);
-    }
-
-    /**
-     * 
-     * @param {*} againstString cased or uncased string to check against (this is for efficiency, so that we don't have to convertcase internally)
-     * @param {*} startCriteria array of starting criteria
-     * @param {*} endCriteria array of ending criteria
-     * @param {*} casedString cased version of against string, so that the cased input can be returned even if uncased input is used for matching.
-     * @returns //{
-     *  unmatched_prefix: str, //cased exact substring of againstString which doesn't match the startcriteria
-     *  matched_start: str, //cased exact substring of start criteria that was matched
-     *  free_content: str, // stuff after a full match of startCriteria but before a partial match of end criteria
-     *  matched_end: str, // cased exact substring of end criteria that was matched
-     *  unmatched_end: str, //cased exact substring leftover after endcriteria
-     * }
-     * 
-     */
-    static doesMatch(againstString, startCriteria, endCriteria, casedString, cancelCriteria) {
-        let result = {
-            unmatched_prefix: "",
-            matched_start: "",
-            free_content: casedString,
-            uncased_free: againstString,
-            matched_end: "",
-            unmatched_end: "",
-            split: 0,
-            criteriaIndex: -1
-        };
-
-        // Initial check for start criteria
-        for (let s in startCriteria) {
-            let start = startCriteria[s];
-            let overlap = this.findOverlap(againstString, start); 
-            if(overlap >= 0) { 
-                if(overlap > 0)
-                    result.unmatched_prefix = casedString.substring(0, overlap);
-                result.matched_start = casedString.substring(overlap, overlap+start.length);               
-                if(result.matched_start.length == start.length) {
-                    result.matched_start = '';
-                    result.split = -1;
-                    result.criteriaIndex = s;
-                }
-                result.free_content = casedString.substring(overlap+start.length, againstString.length);
-                result.uncased_free = againstString.substring(overlap+start.length, againstString.length);
-                break;
-            } else {
-                result.free_content='';
-                result.uncased_free='';
-                result.unmatched_prefix = casedString; 
-            }
-        }
-        if(result.free_content.length > 0) {
-            let against = result.uncased_free;
-            for (let e in endCriteria) {
-                let end = endCriteria[e];
-                let overlap = this.findOverlap(against, end);
-                if(overlap >= 0) {    
-                    result.matched_end = result.free_content.substring(overlap, overlap+end.length);
-                    if(result.matched_end.length == end.length) {
-                        result.unmatched_end = result.free_content.substring(overlap+end.length, against.length);
-                        result.matched_end = '';  
-                        result.split = 1;
-                        result.criteriaIndex = e;
-                    }
-                    result.free_content = result.free_content.substring(0, overlap);
-                    result.uncased_free = result.free_content.substring(0, overlap);
-                    
-                    break;
-                }                
-            }
-            if(endCriteria.length == 0) {
-                result.unmatched_end = result.free_content;
-            }
-        }
-
-        return result;
-    }
-
-    static findOverlap(str1, str2) {
-        let overlap = str1.indexOf(str2);
-        if(overlap >=0 ) return overlap;
-        if(str2.indexOf(str1) == 0) return 0;
-        for (let i = 0; i < str1.length; i++) {
-            if (str2.startsWith(str1.substring(i, str1.length))) {
-                overlap = i;
-                break;
-            }
-        }
-        return overlap;
+    defaultExtractor(chunk) {
+        return chunk.choices[0].text || "";
     }
 }
-const PRE_TAG = -2;
-const TAG_START_MAYBE = -1;
-const TAG_INNER = 0;
-const TAG_END_MAYBE = 1;
-const POST_TAG = 2;
-const NONE = []
-class MatchOnTrack {
-    
-    constructor(start, end) {
-        this.state = PRE_TAG;
-        this.prevstate = this.state;
-        if(Array.isArray(start))
-            this.start = start;
-        else
-            this.start = [start];
-        if(Array.isArray(end))
-            this.end = end;
-        else
-            this.end = [end];
-        this.reset();
-    }
-
-    reset() {
-        this.criteriaIndex = -1;
-        this.criteria_triggered = null;    
-        this.uncased_start = []
-        this.uncased_end = [];
-        for(let s of this.start) {this.uncased_start.push(s.toLowerCase())};
-        for(let s of this.end) {this.uncased_end.push(s.toLowerCase())};
-        this.matchedSoFar = '';
-        this.uncased_matchedSoFar = '';
-        this.state = PRE_TAG;
-        this.prevstate = PRE_TAG;
-        this.potentialMatch = '';
-        this.parsedContent = '';
-        this.accumulated = '';
-        this.endswith = '';
-    }
-
-    /**
-     * case0insensitive accumulating match. 
-     * returns true if the string maintains the match tracked
-     * by this MatchOn, false otherwise.
-    */
-    buildMatch(newchunk) { 
-        if(this.state == POST_TAG && this.prevstate == POST_TAG) {
-            this.potentialMatch = '';
-            this.parsedContent = '';
-            this.sectionwise = '';
-            this.endswith = '';
-            this.prevstate = PRE_TAG;
-            this.state = PRE_TAG;
-        }
-        let startCriteria = this.state < TAG_INNER ? this.uncased_start : NONE;
-        let endCriteria = this.state < POST_TAG ? this.uncased_end : NONE;
-        let showsafe = '';
-        let showCandidate = '';
-        let output = {};
-        //if(endCriteria.length + startCriteria.length == 0) this.endswith += newchunk;
-        this.potentialMatch += newchunk;
-        let tresult = MatchFilter.doesMatch(this.potentialMatch.toLowerCase(), startCriteria, endCriteria, this.potentialMatch, []);
-        if(this.state == TAG_INNER || this.state == TAG_END_MAYBE && tresult.split == 0) {
-            this.parsedContent += tresult.free_content;
-            showCandidate = tresult.free_content;
-            output.tagged_text = tresult.free_content;
-        }
-        if(tresult.split == 1 || tresult.matched_end.length>0 || tresult.unmatched_end.length > 0) {            
-            //showCandidate = tresult.unmatched_end;
-            if(tresult.unmatched_end.length >0 || tresult.split == 1) {
-                this.prevstate = this.state;
-                this.state = POST_TAG;
-                this.endswith += tresult.unmatched_end;
-                this.potentialMatch = tresult.unmatched_end;
-                output.tagged_text = tresult.free_content;
-                output.base_text = tresult.unmatched_end;
-                if(tresult.split == 1) {
-                    this.criteria_triggered = endCriteria[tresult.criteriaIndex];
-                    this.criteriaIndex = tresult.criteriaIndex;
-                }
-            } else {
-                this.prevstate = this.state;
-                this.state = TAG_END_MAYBE;
-                this.potentialMatch = tresult.matched_end;
-                output.tagged_text = tresult.free_content;
-                //this.parsedContent += tresult.free_content;
-                //showCandidate = tresult.free_content;
-            }
-        }
-        else if(tresult.free_content.length > 0 || tresult.split == -1) {
-            this.prevstate = this.state;
-            this.state = TAG_INNER;
-            this.potentialMatch = '';
-            this.startCriteria = [];
-            this.parsedContent += tresult.free_content;
-            output.tagged_text = tresult.free_content
-            if(tresult.split == -1) {
-                this.criteria_triggered = startCriteria[tresult.criteriaIndex];
-                this.criteriaIndex = tresult.criteriaIndex;
-            }
-        } else {
-            this.accumulated += tresult.unmatched_prefix;
-            output.base_text = tresult.unmatched_prefix
-            this.sectionwise += tresult.unmatched_prefix;
-            this.potentialMatch = tresult.matched_start;
-            if(this.potentialMatch.length > 0) {
-                this.prevstate = this.state; 
-                this.state = TAG_START_MAYBE;
-            }
-        }
-        if(this.prevstate >= TAG_INNER && this.prevstate <= TAG_END_MAYBE && this.state >= POST_TAG ) {
-            showsafe = this.parsedContent;
-        } else if(this.state < TAG_START_MAYBE || this.state > TAG_END_MAYBE) {
-            showsafe = showCandidate;
-        }
-        return {prevstate: this.prevstate, state: this.state, 
-                criteriaIndex: this.criteriaIndex, 
-                criteria_name_triggered: this.criteria_triggered,
-                 ...output};
-    }
-}
-
-/*let mf = new MatchFilter('<meta-search>','</meta-search>');
-mf.init();
-let runit = async ()=> {
-    while (true) {
-        let streamgen = await asyncIntGen(100, 1);
-        let stream = mf.feed(streamgen, (chunk) => chunk.choices[0]?.delta?.content || "" )
-        for await (const chunk of stream) {
-            let res = chunk;
-            console.log(res);
-        }
-    }
-}
-
-runit();*/

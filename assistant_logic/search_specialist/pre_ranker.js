@@ -6,7 +6,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getSimilarEmbeddings } from "../../external_hooks/pg_accesss.js";
 import { getETA, getEmbeddings } from "../../external_hooks/replicate_embeddings.js";
-import { asyncInputTextGenfeedback } from "../../dummy_text.js";
+import { asyncInputTextGenfeedback, feedTextToNode } from "../../dummy_text.js";
+import { time } from "console";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,31 +34,44 @@ const runsearch = async (
          */
         me : this
     }) => {
+        s.assistant.setAmGenerating(true);
+        s.assistant.setAmAnalyzing(true);
         let inputQueries = s.in_packets?.queries ?? [];
         let intoNode = null;
         let activeThoughts = Object.keys(s.assistant.replyingInto.thoughts).length
         let search_head = ""
         if(activeThoughts > 0) {
             intoNode = s.assistant.replyingInto.thoughts[''+(activeThoughts-1)]
-            search_head = intoNode.getContent() + "\n\n";
+            search_head = intoNode.getContent() + "\n\n";            
             let ETA = await getETA();
+            let firstCheck = Date.now();
             if(ETA > 10000) {
-              let notice = asyncInputTextGenfeedback("Looks like the vector database is still waking up");
-              for await (let char of notice) 
-                intoNode.appendContent(char, true);
-              let dots = asyncInputTextGenfeedback("...", duration=250);
-              for await (let char of dots) 
-                intoNode.appendContent(char, true);
-              let estimate = asyncInputTextGenfeedback("says it'll be ready in "+parseInt(ETA));
-              for await (let char of estimate) 
-                intoNode.appendContent(char, true);
-              let moredots = asyncInputTextGenfeedback("...", duration=250);
-              for await (let char of moredots) 
-                intoNode.appendContent(char, true);
-              let complain = asyncInputTextGenfeedback("really need better hardware."); 
-              for await (let char of complain) 
-                intoNode.appendContent(char, true);
+              let fed = await feedTextToNode(intoNode, "Looks like the vector database is still waking up",);
+              fed += await feedTextToNode(intoNode, "...", 250);
+              fed += await feedTextToNode(intoNode,"says it'll be ready in "+parseInt(ETA/1000)+" seconds");
+              fed += await feedTextToNode(intoNode,"...", 250);
+              fed += await feedTextToNode(intoNode,"really need better hardware."); 
+              let timeleft = ETA - (Date.now()-firstCheck)
+              let shouldBe = await feedTextToNode(intoNode,"\nShould be up in ");
+              while(timeleft > 100) {
+                await new Promise(resolve => setTimeout(resolve, Math.min(1000, Math.max(timeleft, 0))));
+                let timeElapsed = (Date.now()-firstCheck);
+                timeleft = ETA - timeElapsed;
+                if((timeElapsed > 30000 && timeleft > 30000) || timeleft < 5150) {
+                  intoNode.setContent(fed, true);
+                  await feedTextToNode(intoNode,"\nChecking again...");
+                  ETA = await getETA();
+                  firstCheck = Date.now(); 
+                  timeElapsed = (Date.now()-firstCheck);
+                  timeleft = ETA - timeElapsed;
+                  //intoNode.setContent(fed, true);
+                  await feedTextToNode(intoNode,"\nShould be up in ");
+                } else {
+                  intoNode.setContent(fed+shouldBe+parseInt(Math.max(0, timeleft/1000))+" seconds...", true);
+                }
+              }
             }
+            intoNode.setContent(search_head, true);
         }
 
         let embedded_queries = await getEmbeddings(inputQueries)//(await data.json())?.queryEmbeddings;
@@ -98,7 +112,7 @@ const runsearch = async (
             ranked = ranked.slice(0, n_queries);
         }
         
-        if(intoNode != null) {
+      if(intoNode != null) {
             if(n_queries < embedded_queries.length) {
               search_head = intoNode.getContent() + "\n\n" + "I should narrow these down . . .\n";
               intoNode.setContent(search_head, true);
@@ -128,15 +142,26 @@ const runsearch = async (
             "small" : s.in_packets?.k_per_query ?? 0 
           }
         )
+
+        let all_results_string = "\n\nHere's a peek of the results I found. Give me a moment while I read through them: \n\n'";
+        
+        intoNode.setContent('', true);
+
+        for(let descres of doc_result['desc']) {
+          let resstring = '**'+descres.title ?? '' +"**\n" +descres.text_content+'\n\n';
+          all_results_string += resstring;
+          intoNode.appendContent(resstring,true);
+        }
+        
+        //let allresstring = await feedTextToNode(intoNode, all_results_string);
         //let doc_result = await docsdata.json();
         let docs_by_granularity = {
             granularities: {
                 'desc' : doc_result['desc'],
                 'large' : doc_result['large'],
-                'medium' : doc_result['medium'],
-                'small' : doc_result['small']
+                'medium' : doc_result['medium']
             },
-            query_embeddings: doc_result.queryEmbeddings
+            query_embeddings: filteredQ.query_vectors
         }
         
 
@@ -203,39 +228,21 @@ const preranker = async (
     }) => {
         let candidates = s.in_packets.candidates
         let queries = s.in_packets.candidates.query_embeddings
-        let excerptScores = {}
-        let fullDocScores = {}
-        let fullDocuments = {}
-        let fullDocpages = {}
+        let article_counts = {};
+        for(let [k, gran] of Object.entries(candidates.granularities)) {
+          for(let row of gran) {
+            article_counts[row.article_id] = article_counts[row.article_id] == null ? 1 : article_counts[row.article_id] + 1;
+          }
+        }
 
-        let docs_by_query = []
-        
-        console.log("got "+queries.length+" queries")
-        for(let qnum = 0; qnum < queries.length; qnum++) {
-            for(let gk of Object.keys(candidates.granularities)) {
-                let g = candidates.granularities[gk]
-                try {
-                    for(let i=0; i< g.ids[qnum].length; i++) {  
-                        let doc_id = g.ids[qnum][i]                 
-                        let qresult = {
-                            'id' : doc_id,
-                            'excerpt': g.documents[qnum][i], 
-                            'metadata' : g.metadatas[qnum][i],
-                            'distance' : g.distances[qnum][i],
-                            'granularity' : gk
-                        }
-                        docs_by_query[qnum] = docs_by_query[qnum] ?? {}
-                        docs_by_query[qnum][doc_id] = docs_by_query[qnum][doc_id] ?? {all: [], by_granularity: {}}
-                        docs_by_query[qnum][doc_id].by_granularity[gk] = docs_by_query[qnum][doc_id].by_granularity[gk] ?? []
-                        docs_by_query[qnum][doc_id].by_granularity[gk].push(qresult)
-                        docs_by_query[qnum][doc_id].all.push(qresult)
-                        excerptScores[gk+"__"+doc_id] = excerptScores[gk+"__"+doc_id] ?? {crossQ : 1, crossG: 1, distance: -1, date: null, result: qresult}
-                        excerptScores[gk+"__"+doc_id].crossQ *= qresult.distance
-                    }
-                } catch(e) {
-                    console.log(e)
-                }
-            }
+        let mingran = {"desc": candidates.granularities["desc"], "large" : candidates.granularities["large"]}
+
+        let flat = []
+        for(let [k, gran] of Object.entries(mingran)) {
+          for(let row of gran) {
+            row.score = row.distance * article_counts[row.article_id];
+            flat.push(row);
+          }
         }
         
 
@@ -263,14 +270,14 @@ const preranker = async (
             
         }*/
         console.log("sorting db results");
-        let results = Object.values(excerptScores)
-        results = results.sort((a, b) => {
-            return b.crossQ - a.crossQ; 
+        let results = [];
+        results = flat.sort((a, b) => {
+            return b.score - a.score; 
         })
 
         console.log("filtering db results");
 
-        let filtered = results.slice(0, s.in_packets)
+        let filtered = results.slice(0, s.in_packets.n_out)
         return {ranked_results : filtered}
 }
 
@@ -7341,15 +7348,8 @@ export const testresult = {
     n_out: 10,
   }
 
-/*let queries = [`Caching in cosineCompare: The caching strategy in cosineCompare is efficient,`, `preventing redundant calculations of cosine similarity.`,
+let queries = [`Caching in cosineCompare: The caching strategy in cosineCompare is efficient,`, `preventing redundant calculations of cosine similarity.`,
 `Clarity in Function Names: The name cosinesort could be more descriptive.`, `A name like insertSortedByCosineSimilarity might better convey the function's purpose.`,
 `Variable Names: Some variable names could be more descriptive. For instance`, `s and me in the runsearch function parameters could be renamed for clarity.`,
 `Default Parameter Values: You've used default parameter values in runsearch.`]; 
 
-
-
-runsearch({in_packets : {
-    search_queries: queries,
-    n_queries: 5,
-    k_per_query: 5
-}});*/

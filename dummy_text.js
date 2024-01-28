@@ -40,3 +40,12 @@ export async function* asyncInputTextGenfeedback(inputText = "", duration=10, ma
         yield resultPart;       
     }
 }
+
+export async function feedTextToNode(intoNode, inputText = "", duration=10) {
+    if(intoNode != null) {
+        let feeder = asyncInputTextGenfeedback(inputText); 
+        for await (let char of feeder) 
+            intoNode.appendContent(char.choices[0].delta.content, true);
+    }
+    return inputText;
+}

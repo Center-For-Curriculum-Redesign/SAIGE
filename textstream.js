@@ -154,6 +154,11 @@ app.post('/prompt_internal', async (req, res) => {
 
 });
 
+app.get('/eta', async(req,res) => {
+	let eta = await getETA();
+	res.json({eta:eta});
+});
+
 app.post('/chat_commands/:key', async (req, res) => {
     const replyContent = req.body;
     const key = req.params.key;

@@ -315,7 +315,7 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         convo_tree.save(fs, filePath)
     }
     
-    if(convo_tree == null) {
+    /*if(convo_tree == null) {
         const filePath = getConvoPath(key);
         convo_tree = await convos.Convo.load(fs, filePath);
         if(convo_tree != null) {
@@ -339,7 +339,7 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         const filePath = getConvoPath(convo_tree.conversationId);
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
         convo_tree.save(fs, filePath)
-    }
+    }*/
 
     let streamer = null;
     if(convo_tree != null) {

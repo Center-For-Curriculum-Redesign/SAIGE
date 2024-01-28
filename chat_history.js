@@ -453,7 +453,7 @@ export class MessageHistories {
         let toGet = splitted[0];
         if (splitted.length === 1) {
             if (toGet !== this.nodeId) {
-                throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
+                throw new Error(`node_entry ${fullSequence} not found: When attempting to get: ${toGet} in ${this.nodeId} with subnodestring ${subnodeString}`);
             } else {
                 return [this];
             }

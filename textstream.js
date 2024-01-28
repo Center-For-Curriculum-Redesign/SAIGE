@@ -86,10 +86,10 @@ async function setUserTokenIds(req, res) {
             TOKEN_USER_MAP[user_token] = {'salt': salt, 'user_id': user_id}
             req.user_id = user_id
         } else { //branch for claims from whoever-the-fuck.            
-            let token = req.token || req.body.token; 
+            let token = req?.token || req?.body?.token || req?.params?.token || req?.query?.token; 
             if(TOKEN_USER_MAP[token]) {
                 //let purporteduser_id = req?.user_id || req?.params?.user_id || req?.query?.user_id || req?.body?.user_id;
-                req.user_id = TOKEN_USER_MAP[token]['user_id'];
+                req.user_id = TOKEN_USER_MAP[token]['user_id'] || token;               
                 /*let salt = TOKEN_USER_MAP[token]['salt'];
                 let decrypted_user_id = decrypt(ccrkey, salt, token);
                 let matched_user_id = TOKEN_USER_MAP[token]['user_id'];
@@ -115,7 +115,7 @@ app.get('/chat/', async (req, res) => {
     if(req.query.convo) {
         key = req.query.convo;
     }
-    let convo_tree = await find_load_make_convo(null, null, make=true, req);
+    let convo_tree = await find_load_make_convo(null, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -130,7 +130,7 @@ app.get('/chat/:key', async (req, res) => {
     if(req.query.convo != null) { 
         key = req.query.convo;
     }
-    let convo_tree = await find_load_make_convo(key, null, make=true, req);
+    let convo_tree = await find_load_make_convo(key, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -193,7 +193,7 @@ app.post('/chat_commands/:key', async (req, res) => {
     req = await setUserTokenIds(req, res)
     const replyContent = req.body;
     const key = req.params.key;
-    let convo_tree = await find_load_make_convo(replyContent.conversationId, res, make=true, req);
+    let convo_tree = await find_load_make_convo(replyContent.conversationId, res, true, req);
     //let eventStreamer = event_streamers[convo_tree.conversationId]; 
     let assistant = asst_cache[convo_tree.conversationId];
     if(key.endsWith('_reply')) {

@@ -195,12 +195,14 @@ export class Convo {
             activePath : this.activePath,  
             systemPrompt : showPrompt,          
             conversationId : this.conversationId,
-            messagenodeUuid : this.conversationId
+            messagenodeUuid : this.conversationId,
+            user_id: this.user_id
         };
     }
 
     static fromJSON(json) {
         let newConvo = new Convo(json.conversationId, json.systemPrompt);
+        newConvo.user_id = json.user_id;
         newConvo.activePath = json.activePath;
         newConvo.initRoot(MessageHistories.fromJSON(json.messages, null, newConvo.conversationId, newConvo));
         return newConvo;

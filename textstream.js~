@@ -115,7 +115,7 @@ app.get('/chat/', async (req, res) => {
     if(req.query.convo) {
         key = req.query.convo;
     }
-    let convo_tree = await find_load_make_convo(null, res, true, req);
+    let convo_tree = await find_load_make_convo(null, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -130,7 +130,7 @@ app.get('/chat/:key', async (req, res) => {
     if(req.query.convo != null) { 
         key = req.query.convo;
     }
-    let convo_tree = await find_load_make_convo(key, res, true, req);
+    let convo_tree = await find_load_make_convo(key, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -238,14 +238,14 @@ app.get('/chat_events/:key', async (req, res) => {
 
 
 app.post('/expand_chunk', async (req, res) => {
-    if(! await forceServerAuth(req, res)) return;  
+    if(! await checkServerAuth(req, res)) return;  
     const rc = req.body;   
     let result = await _localExpandChunk(rc.input_chunk, rc.n_before, rc.n_after);
     res.json(result);
 });
 
 app.post('/get_similarity', async (req, res) => { 
-    if(! await forceServerAuth(req, res)) return; 
+    if(! await checkServerAuth(req, res)) return; 
     const rc = req.body;
     let embeddings_list = rc.embeddings_list;
     let granularities = rc.granularities_list;
@@ -254,7 +254,7 @@ app.post('/get_similarity', async (req, res) => {
     res.json(result)    
 });
 app.post('/get_endpoints', async (req, res) => {
-    if(! await forceServerAuth(req, res)) return; 
+    if(! await checkServerAuth(req, res)) return; 
     const rc = req.body;
     let embeddings_list = rc.embeddings_list;
     let granularities = rc.granularities_list;
@@ -314,7 +314,10 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
         convo_tree.save(fs, filePath)
     }
-    
+    else {
+        convo_tree = conversation_cache[key];        
+    }
+ 
     if(convo_tree == null) {
         const filePath = getConvoPath(key);
         convo_tree = await convos.Convo.load(fs, filePath);
@@ -341,7 +344,6 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         convo_tree.save(fs, filePath)
     }
 
-    let streamer = null;
     if(convo_tree != null) {
         if(convo_tree.user_id == null)
             convo_tree.user_id = 'global'        
@@ -353,13 +355,12 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
                 asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
             }
         }
-        streamer = event_streamers[convo_tree.conversationId];
     }
 
-    
+    let streamer = event_streamers[convo_tree.conversationId];
     
     if(res != null) 
-        streamer.registerListener(res, res.user_id);
+        streamer.registerListener(res);
 
     convo_tree.on_textContent_change = (newNode) => {
         let currStream = event_streamers[convo_tree.conversationId];
@@ -397,7 +398,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         event_name: 'asst_reply_init',
         messagenodeUuid: data.messagenodeUuid,
         conversationId: data.conversationId,
-        responseTo: responseTo.toJSON(),
+        responseTo: responseTo.toJSON().messagenodeUuid,
         payload: resultNode.toJSON()
     })
     asst.on_commit = (commit_packet, byasst, throughNode) => {
@@ -457,11 +458,6 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
 }
 
 async function checkServerAuth(req,res) {
-	if (req.header('Authorization') === 'Bearer '+ccrkey) return true;
-	return false;        
-}
-
-async function forceServerAuth(req,res) {
 	if (req.header('Authorization') === 'Bearer '+ccrkey) return true;
 	res.status(401).send('Unauthorized request.');
 	return false;        

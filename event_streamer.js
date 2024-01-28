@@ -35,7 +35,7 @@ export class EventStreamer {
     }
 
     registerListener(res, user_id) {
-        if(user_id = null) {
+        if(user_id == null) {
             throw new Error("User_id required");
         }
         res.user_id = user_id;

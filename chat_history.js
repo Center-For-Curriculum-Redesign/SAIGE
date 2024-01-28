@@ -96,12 +96,12 @@ export class Convo {
      * }
      */
     _on_textContent_change(nodeInfo) {
-        let nodeInfo_uw = nodeInfo
-        if(nodeInfo.nodeInfo != null) {
-            nodeInfo_uw = nodeInfo.nodeInfo;
-        }
-        nodeInfo_uw.conversationId = this.conversationId;
         if(this.on_textContent_change) {
+            let nodeInfo_uw = nodeInfo
+            if(nodeInfo.nodeInfo != null) {
+                nodeInfo_uw = nodeInfo.nodeInfo;
+            }
+            nodeInfo_uw.conversationId = this.conversationId;        
             this.on_textContent_change({
                 type: 'content_change',
                 nodeInfo: nodeInfo_uw
@@ -122,18 +122,18 @@ export class Convo {
      * The redundancy in naming is so you can be less careful with how you wrap the payload when broadcasting. 
      * Please be as irresponsible as possible.
      */
-    _on_structure_change(changeType, nodeInfo) {
-        let changeType_uw = changeType;
-        let nodeInfo_uw = nodeInfo
-        if(nodeInfo.changeType != null && nodeInfo.nodeInfo != null) {
-            changeType_uw = nodeInfo.changeType;
-            nodeInfo_uw = nodeInfo.nodeInfo;            
-        }
-        nodeInfo_uw.conversationId = this.conversationId;
-        if(changeType != 'node_added' && changeType != 'node_removed') {
-            throw Error("structure changeType must be one of `node_added` or `node_removed`");
-        }
+    _on_structure_change(changeType, nodeInfo) {        
         if(this.on_structure_change) {
+            let changeType_uw = changeType;
+            let nodeInfo_uw = nodeInfo
+            if(nodeInfo.changeType != null && nodeInfo.nodeInfo != null) {
+                changeType_uw = nodeInfo.changeType;
+                nodeInfo_uw = nodeInfo.nodeInfo;            
+            }
+            nodeInfo_uw.conversationId = this.conversationId;
+            if(changeType != 'node_added' && changeType != 'node_removed') {
+                throw Error("structure changeType must be one of `node_added` or `node_removed`");
+            }
             let infoObj = {
                 type: changeType_uw,
                 event_name: changeType_uw,
@@ -141,6 +141,42 @@ export class Convo {
                 nodeInfo : nodeInfo_uw.toJSON()
             }
             this.on_structure_change(infoObj);
+        }
+    }
+
+    /**
+     * internal wrapper for user definable on_state_change.
+     * you can use this to register callbacks for whenever a descendant node has had it's state attribute changed, 
+     * (common attributes include:
+     *  'init' -- set when a node is still being created, usually before having all attributes necessary for saving, 
+     *  'committed' -- set when the contents of a node are no longer intended to be modiied, implying the node can be saved in the full structure.
+     *  'hidden' -- set when a node should be collapsed or hidden from the user.)
+     * {
+     *      event_name: 'node_state_changed',
+     *      previous: the previous state,
+     *      nodeInfo: {//JSON of the MessageHistoryNode that was added or removed.
+     *  }
+     * The redundancy in naming is so you can be less careful with how you wrap the payload when broadcasting. 
+     * Please be as irresponsible as possible.
+     * @param {*} nodeInfo 
+     * @param {*} previous_state 
+     */
+    _on_state_change(nodeInfo, previous_state) {        
+        if(this.on_state_change  != null) {
+            let nodeInfo_uw = nodeInfo
+            if(nodeInfo.nodeInfo != null) {
+                nodeInfo_uw = nodeInfo.nodeInfo;
+            }
+            nodeInfo_uw.conversationId = this.conversationId; 
+            let infoObj = {
+                event_name: 'node_state_changed',
+                prev: previous_state,
+                previous: previous_state,
+                previous_state: previous_state,
+                prev_state: previous_state,
+                nodeInfo : nodeInfo_uw.toJSON()
+            }
+            this.on_content_change(infoObj);
         }
     }
 
@@ -211,7 +247,7 @@ export class MessageHistories {
         return this.author;
     }
 
-    setState(newState) {
+    setState(newState, notify = false) {
         this.state = newState;
     }
     getState() {
@@ -226,7 +262,7 @@ export class MessageHistories {
      * and adds it to this messagehistories thought map.
     */
     newThought(author, notify = false) {
-        let newThought = new ThoughtHistories(author, this.conversationId, this.conversation_node);
+        let newThought = new ThoughtHistories(author, '', this.conversationId, this.conversation_node);
         this.thoughts[Object.keys(this.thoughts).length] = newThought;
         this.thoughtsByUuid[newThought.messagenodeUuid] = newThought;
         newThought.setParentNode(this);

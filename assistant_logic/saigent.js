@@ -38,6 +38,13 @@ export class ASST {
         this.setAmAnalyzing(false)
     } */
 
+    cancelRequest() {
+        if(this.replyingInto != null) {
+            this.commit(this.replyingInto.textContent, this.replyingInto)
+            this.ban_updates = this.replyingInto;
+        }
+    }
+
     commit(packet, throughNode = this.replyingInto) {
         this.setAmAnalyzing(false, throughNode);
         this.setAmGenerating(false, throughNode); 
@@ -45,12 +52,16 @@ export class ASST {
         if(this.on_commit != null) {
             this.on_commit(packet, this, throughNode);
         }
+        
     }
 
 
     setStateHint(newState, throughNode = this.replyingInto) {
         let oldStates = [...this.stateHints];
         this.stateHints = [newState];
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         this._on_state_change({
                 oldStateHints : oldStates,
                 newStateHints : this.stateHints
@@ -61,6 +72,9 @@ export class ASST {
         let oldStates = [...this.stateHints];
         this._not_idle();
         this.stateHints.append(newState);
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         this._on_state_change({
                 oldStateHints : oldStates,
                 newStateHints : this.stateHints
@@ -77,6 +91,9 @@ export class ASST {
     }
 
     setAmAnalyzing(state, throughNode = this.replyingInto) {
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         if(this.am_analyzing != state) {
             this.am_analyzing = state;
             this._not_idle();
@@ -85,6 +102,9 @@ export class ASST {
     }
 
     setAmGenerating(state, throughNode = this.replyingInto) {
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         if(this.am_analyzing != state) {
             this.am_generating = state;
             this._not_idle();
@@ -93,12 +113,18 @@ export class ASST {
     }
 
     _on_state_change(packet, throughNode = this.replyingInto) {
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         if(this.on_state_change != null) {
             this.on_state_change(packet, this, throughNode);
         }
     }
     
     _on_generate(packet, throughNode = this.replyingInto) {
+        if(throughNode == this.ban_updates) {
+            return;
+        }
         if(this.on_generate != null) {
             this.on_generate(packet, this, throughNode);
         }

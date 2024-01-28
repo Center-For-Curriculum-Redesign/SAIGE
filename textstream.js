@@ -1,12 +1,14 @@
 await import('dotenv/config');
 import express from 'express';
+import morgan from 'morgan';
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as prompts from './assistant_logic/reasoning_prompts.js';
 import * as asst from './assistant_logic/saigent.js';
 import { EventStreamer } from './event_streamer.js';
-
+import fetch from 'node-fetch';
+import got from 'got';
 import fss from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -17,6 +19,7 @@ import { createSecureServer } from 'http2';
 import http2Express from 'http2-express-bridge';
 import { ponderPromptInst } from './assistant_logic/basic/consider.js';
 import { getETA, heartbeatEmbedding } from './external_hooks/replicate_embeddings.js';
+import { _localgetSimilarEmbeddings, _localExpandChunk } from './external_hooks/pg_accesss.js';
 
 const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
@@ -47,6 +50,11 @@ app.use(express.static('static'));
 app.use(express.json());
 app.set('view engine', 'ejs');
 app.set('views', './views');
+app.use(morgan('combined'));
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).send('Something broke!');
+});
 
 const conversation_cache = {}; //map of conversationuuids to conversation objects.
 const asst_cache = {}; //map of conversationuuids to assistant instances.
@@ -101,47 +109,7 @@ app.post('/prompt_internal', async (req, res) => {
     });
     res.json(new_reply);
 
-// test code, with dummy response
-
-/*
-    let resultNode = new convos.MessageHistories('assistant', '');
-    resultNode.setIntendedParentNode(new_reply);
-    let messagenodeUuid = resultNode.toJSON().messagenodeUuid;
-    eventStreamer.broadcastEvent({
-    	event_name: 'asst_reply_init',
-    	messageuuid: messagenodeUuid,
-       	conversationId: convo_tree.conversationId
-    });
-    let textstream = dummy_text.asyncIntGen(500, 100);
-    let accumulated = "";
-    (async () => {
-        for await (const chunk of textstream) {
-            let deltachunk = chunk.choices[0]?.delta?.content || ""
-            accumulated += ' '+deltachunk;
-            eventStreamer.broadcastEvent({
-            	event_name: 'asst_reply_updated',
-            	data: deltachunk,
-            	textContent: accumulated,
-            	messageuuid: messagenodeUuid,
-            	conversationId: convo_tree.conversationId
-            });
-        }
-		eventStreamer.broadcastEvent({
-			event_name: 'asst_reply_committed',
-			textContent: accumulated,
-			messageuuid: messagenodeUuid,
-           	conversationId: convo_tree.conversationId,
-           	responseTo: new_reply.toJSON().messagenodeUuid
-		});
-        new_reply.addChildReply(resultNode);
-        new_reply.setPath(resultNode.getNodeId());
-        resultNode.setContent(accumulated);
-        resultNode.setState('committed');
-        const filePath = getConvoPath(convo_tree.conversationId);
-        convo_tree.save(fs, filePath);
-    }) ();
-*/
-
+// test code, with dummy respons
 // real code, with asst response
 
     //save to disk after the assistant replies.
@@ -177,6 +145,9 @@ app.post('/chat_commands/:key', async (req, res) => {
                 convo_tree.save(fs, filePath);
             });
     }
+    if(key == "cancel_request") {
+        assistant.cancelRequest();
+    }
 })
 
 app.get('/chat_events/:key', async (req, res) => {
@@ -192,6 +163,22 @@ app.get('/chat_events/:key', async (req, res) => {
             console.log('Client disconnected');
         }
     });*/
+});
+
+
+app.post('/expand_chunk', async (req, res) => { 
+    const rc = req.body;   
+    let result = await _localExpandChunk(rc.input_chunk, rc.n_before, rc.n_after);
+    res.json(result);
+});
+
+app.post('/get_similarity', async (req, res) => { 
+    const rc = req.body;
+    let embeddings_list = rc.embeddings_list;
+    let granularities = rc.granularities_list;
+    let additionalFilters = rc.additional_filters;
+    let result = await _localgetSimilarEmbeddings(embeddings_list, granularities, additionalFilters);
+    res.json(result)    
 });
 
 
@@ -331,15 +318,16 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
 //        resultNode.textContent += generate_packet.delta_content;
 //        resultNode.fullPacket = generate_packet;
 //        resultNode.setState(generate_packet.changedVal);
-        let responseTo = throughNode?.parentNode ?? responseTo;
-        let data = resultNode.toJSON();
+        let forNode = throughNode == null ? resultNode : throughNode;
+        let responseToPar = forNode?.parentNode ?? responseTo;
+        let data = forNode.toJSON();
         streamer.broadcastEvent({
             event_name: 'asst_state_updated',
             messageuuid: data.messagenodeUuid, 
 	        conversationId: data.conversationId,
 	        state: data.state,
-	        responseTo: responseTo.toJSON().messagenodeUuid,
-            payload: resultNode.toJSON()
+	        responseTo: responseToPar.toJSON().messagenodeUuid,
+            payload: forNode.toJSON()
         })
     };
 /*
@@ -365,7 +353,45 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
 async function checkServerAuth(req,res) {
 	if (req.header('Authorization') === 'Bearer '+ccrkey) return true;
 	res.status(401).send('Unauthorized request.');
-	return false;
-        resultNode.setState('generating');
-        
+	return false;        
+}
+
+async function logFullResponse(response) {
+    // Log response status and status text
+    console.log(`Status: ${response.status}`);
+    console.log(`Status Text: ${response.statusText}`);
+
+    // Log headers
+    console.log('Headers:');
+    response.headers.forEach((value, key) => {
+        console.log(`${key}: ${value}`);
+    });
+
+    try {
+        // Log body
+        const contentType = response.headers.get('content-type');
+        let responseBody;
+        if (contentType && contentType.includes('application/json')) {
+            responseBody = await response.json();
+        } else {
+            responseBody = await response.text();
+        }
+        console.log('Body:', responseBody);
+    } catch (error) {
+        console.error('Error reading response body:', error);
     }
+}
+
+export async function doFetchPost(url, data) {    
+    try {
+        const response = await got.post(url, {
+            http2: true,
+            json: data,
+            responseType: 'json'
+        });
+
+        return response.body;
+    } catch (error) {
+        console.error(error.response.body);
+    }
+}

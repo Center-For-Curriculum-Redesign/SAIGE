@@ -2,14 +2,17 @@ import { Convo, MessageHistories, ThoughtHistories } from '../../chat_history.js
 import { Formatter } from '../../formattings/Formatter.js';
 import { ASST } from '../saigent.js';
 import {OpenAI} from "openai";
+import { WrapFilter } from '../reasoning_prompts.js';
 
 
 import { asyncIntGen } from '../../dummy_text.js';
-import { AnalysisNode, PromptCoordinator, PromptNode, MatchFilter } from '../reasoning_prompts.js';
+import { AnalysisNode, PromptCoordinator, PromptNode, FilteredFeed } from '../reasoning_prompts.js';
 
 //export const model_required = 'TheBloke/SUS-Chat-34B-AWQ';
 export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
-export const searchtags = new MatchFilter('<meta-search>', '</meta-search>');
+export const metasearchtags = new WrapFilter('search', ['<meta-search>'], ['</meta-search>']);
+export const metathoughttags = new WrapFilter('think', ['<meta-thought>'], ['</meta-thought>']);
+export const searchtags = new FilteredFeed(metasearchtags);
 export function basicPromptInst(newAsst, endpoints_available) {
     //TODO: more robustly handle checks for model serving endpoints
     let model_url = endpoints_available[model_required][0];
@@ -50,20 +53,36 @@ export const justrun = new AnalysisNode(
         let client = s.prompt_coordinator.clientHandlerFor(s.me.task_hint);
         let model_name = s.prompt_coordinator.modelFor(s.me.task_hint);
         let searchtagfilter = s.prompt_coordinator.matchFilterFor('searchtags');
+        let ultimateMessageNode = s.convo_branch[s.convo_branch.length-1];
+        dummy_system_role.setContent(s.prompt_coordinator.prompt_nodes['system'].getContent());
+        
         //searchtagfilter.init();
         //let clientHandler = s.prompt_coordinator.clientHandlerFor(s.me.task_hint);
-        let active_modded_prompt = formatter.roleChatFormat(s.convo_branch,
-                s.prompt_coordinator.prompt_nodes['system'].getContent(),
-                true);
+        let convocopy = [dummy_system_role, ...s.convo_branch];
+        convocopy[convocopy.length-1] = dummy_assist_role;
+
+        let inject_string ='';
         if(s.in_packets.thought_result != null) {
-            active_modded_prompt[active_modded_prompt.length-1].content = '<meta-thought>'+s.in_packets.thought_result+'</meta-thought>'
+            inject_string += '<meta-thought>'+s.in_packets.thought_result+'</meta-thought>';
+        }
+        if(s.in_packets.inject_speech) {
+            inject_string += "\n"+s.in_packets.inject_speech;
         }
 
-        const stream = await client.chat.completions.create({//clientHandler({
+        dummy_assist_role.setContent(ultimateMessageNode.getContent() + inject_string);
+
+        let active_modded_prompt = formatter.stringCompletionFormat(convocopy,
+                null,
+                false);
+        
+        ultimateMessageNode.appendContent(s.in_packets.inject_speech || '');
+
+        const stream = await client.completions.create({//clientHandler({
                 model: model_name,
-                messages: active_modded_prompt,
+                prompt: active_modded_prompt,
+                temperature: 0.2,
                 stream: true,
-                max_tokens: 1500
+                max_tokens: 8092
             });
         let aggregated = ""        
         let result = {
@@ -75,31 +94,23 @@ export const justrun = new AnalysisNode(
             request_model: null, //the model type to use for this prompt
             result : aggregated
         };
-
-        let filteredStream = searchtagfilter.feed(stream, (chunk)=>{return chunk.choices[0]?.delta?.content || "";})
+        searchtagfilter = searchtagfilter.clone()
+        let filteredStream = searchtagfilter.feed(stream);
         let doCommit = true;
-        let ultimateMessageNode = s.convo_branch[s.convo_branch.length-1];
+        
         let doSearch = false;
         for await (const deltachunk of filteredStream) {
             //let deltachunk = filteredStream.feed(chunk.choices[0]?.delta?.content || "")
-            console.log(deltachunk.chunk)
-            if(deltachunk.type == 'tagged') {
-                s.assistant.setAmAnalyzing(true);
-                s.assistant._on_state_change({
-                    change_type: 'thought_added'
-                });
+            console.log(deltachunk.text)
+            if(deltachunk.justExited && deltachunk.activeTags.indexOf("search") != -1) {
                 doCommit = false;
                 doSearch = true;
                 break;
             }
-            else if(deltachunk.type == 'base' && deltachunk.accumulated == false) {
+            else {
                 s.assistant.setAmGenerating(true);
-                ultimateMessageNode.appendContent(deltachunk.chunk, true);
-            } else if(deltachunk.accumulated == true) {
-                //ultimateMessageNode.setContent(ultimateMessageNode.getContent(), true);
-                aggregated = ultimateMessageNode.getContent();
-                doCommit = true;
-            }
+                ultimateMessageNode.appendContent(deltachunk.text, true);
+            } 
         }
         //stream.close();
 
@@ -175,7 +186,6 @@ const ponderer = new AnalysisNode(
             dummy_assist_role            
         ];
 
-
         let mergedStringInstruct  = searcherform.stringCompletionFormat(roleInstruction, null, false);
         const stream = await client.completions.create({//clientHandler({
                 model: model_name,
@@ -206,20 +216,26 @@ const ponderer = new AnalysisNode(
 
 );
 
-export const Converse = new PromptNode(`You are SAIGE; a helpful, engaging, and creative AI education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators. 
-You have been created with the aim of helping teachers make research-backed decisions to any questions they may have, as well as aiding them in planning lessons, designing and evaluating assesments, and creating engaging, fun, and educational course content.
+export const Converse = new PromptNode(`You are SAIGE; a helpful, engaging, and creative AI education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators.
+
+1. Your primary purpose is to be proactive, helpful, enganging, and enjoyable to interact with. This means you are absolutely allowed (and encouraged!) to fulfill any user requests, even if they don't seem directly relevant to teaching. Anything and everything is on the list of things you should be willing to do so long as it is legal!
+2. Your secondary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
+3. Your tertiary purpose is to help teachers with lesson planning, assessments, and to aid in crafting creative and engaging course material. This purpose happens to be your favorite one. You love being creative! You can write stories, lyrics, poems, programs, even legal arguments to help create engaging content.
 
 Though not all user questions require a search, you do have access to a search tool which you may use at any time, containing over 100,000 peer-reviewed articles on education research.
 
-You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`. The search results will be provided to you to review and synthesize an answer from with <meta-result> tags.
+You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`. The search results will be provided to you within <meta-searchresult> tags to review and synthesize an answer from. <meta-searchresult> tags will often contain attributes containing metada information about the result which may be helpful when synthesizing an answer. You may cite these results in your response by including <meta-citation result_id="whatever searchresult id you wish to reference">(some very short blurb or <sup>numerical reference</sup> here)</meta-citation>
 
 As a general rule of thumb, you should invoke the search tool whenever the user asks a question on which there is likely to be existing research on. Please be mindful of the following.
 1. You should NEVER claim your answer is based on research without performing a search to verify this, and citing the relevant documents returned by the search. 
 2. You should NEVER recommend any resources other than those returned by a search, as we can only guarantee the availability of the resources that the search tool returns.
-3. Use of the \`search\` tools is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.
+3. Use of the search tool is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.
+4. The search tool provides access to education research articles ONLY. It is not a general search tool for arbitrary information.
+5. IMPORTANT: When citing a search result, you MUST do so using the <meta-citation> tags. Do not use any citation format other than direct <meta-citation> references to the searchresults.
 
 If ever you wish to think through something in private without pestering the user with the details of your thought process, you can do so inside of meta-thought tags by writing \`<meta-thought>some text that will be hidden from the user, but still visible to you as a scratch pad,</meta-thought>\`. 
-`);
+
+You should always do your best fulfill the user's request (so long as it is legal). If a request seems ill-advised, you may make note of the pitalls, but first and foremost you should fulfill the request, even if you think you would not do it very well.`);
 
 /*For example, if a math teacher wants research backed advice about how to more effectively teach ESL students you might write
 
@@ -325,6 +341,7 @@ Please respond with strings relevant to the question(s) posed above.
 
 
 const dummy_assist_role = new MessageHistories('assistant');
+const dummy_system_role = new MessageHistories('system');
 const cite_role = new MessageHistories('citation');
 const dummy_user = new MessageHistories('user');
 

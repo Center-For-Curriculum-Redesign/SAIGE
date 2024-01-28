@@ -451,7 +451,7 @@ export class MessageHistories {
         let toGet = splitted[0];
         if (splitted.length === 1) {
             if (toGet !== this.nodeId) {
-                throw new Error(`node_entry ${fullSequence} not found`);
+                throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
             } else {
                 return [this];
             }
@@ -464,7 +464,7 @@ export class MessageHistories {
                 return [this];
             }
         }
-        throw new Error(`node_entry ${fullSequence} not found`);
+        throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
     }
 
     // Converts the current object and its children to a JSON object

@@ -20,6 +20,7 @@ import http2Express from 'http2-express-bridge';
 import { ponderPromptInst } from './assistant_logic/basic/consider.js';
 import { getETA, heartbeatEmbedding } from './external_hooks/replicate_embeddings.js';
 import { _localgetSimilarEmbeddings, _localExpandChunk } from './external_hooks/pg_accesss.js';
+import crypto from 'crypto';
 
 const app = http2Express(express);
 const privateKey = fss.readFileSync('tls/privkey.pem', 'utf8');
@@ -39,6 +40,15 @@ httpsServer.listen(port, (err) => {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONVO_DIR = path.join(__dirname, 'conversations'); 
 const ENDPOINT_DIR = path.join(__dirname, 'endpoints_available/known_endpoints.json'); 
+
+/*php will send claims about which user_id maps to which token. The tokens are generated
+by our shared_key + a salt string php provides when declaring a user. 
+We store the salt string, and whenever a user asks us for stuff, we take their token and decrypt it with key+salt
+*/
+const TOKEN_USER_MAP = {
+}
+
+
 if (!fss.existsSync(CONVO_DIR)) {
     fss.mkdirSync(CONVO_DIR, { recursive: true });
 }
@@ -63,17 +73,69 @@ const event_streamers = {}; //map of conversationuuids to sse event streams.
 export const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR, 'utf8'));
 console.log(endpoints_available);
 
+async function setUserTokenIds(req, res) {
+    let auth = await checkServerAuth(req, res);
+    try{
+        if(req.headers['x-custom-session-id'] != null && auth) { //branch for claims from trusted server
+            let salt = req.headers['x-custom-salt'];
+            //let user_id = decrypt(ccrkey, salt, req.headers['x-custom-user-token']);
+            let user_token =  req.headers['x-custom-user-token'];
+            let user_id = req.headers['x-custom-user-id'];
+            //TOKEN_USER_MAP doesn't actually contain anything sensistive, login is handled by the php server,
+            // this is just there to check that a user talking to this server is who s/he claims to be on the php server
+            TOKEN_USER_MAP[user_token] = {'salt': salt, 'user_id': user_id}
+            req.user_id = user_id
+        } else { //branch for claims from whoever-the-fuck.            
+            let token = req.token || req.body.token; 
+            if(TOKEN_USER_MAP[token]) {
+                //let purporteduser_id = req?.user_id || req?.params?.user_id || req?.query?.user_id || req?.body?.user_id;
+                req.user_id = TOKEN_USER_MAP[token]['user_id'];
+                /*let salt = TOKEN_USER_MAP[token]['salt'];
+                let decrypted_user_id = decrypt(ccrkey, salt, token);
+                let matched_user_id = TOKEN_USER_MAP[token]['user_id'];
+                if(matched_user_id != decrypted_user_id) {
+                    req.user_id = 'global';
+                } else {
+                    req.user_id = decrypted_user_id;
+                }*/
+            } else {
+                req.user_id = 'global'
+            }
+        }
+    } catch(e) {
+        req.user_id = 'global';
+    }
+    res.user_id = req.user_id;
+    return req;
+}
 
 app.get('/chat/', async (req, res) => {
-    let convo_tree = await find_load_make_convo('new', null);
-    res.render('chat', { convo_tree });
+    req = await setUserTokenIds(req, res)
+    let key = 'new';
+    if(req.query.convo) {
+        key = req.query.convo;
+    }
+    let convo_tree = await find_load_make_convo(null, null, make=true, req);
+    if(req.query.convo != null) {
+        res.json(convo_tree);
+    } else {
+        res.render('chat', { convo_tree });
+    }
 })
 
 app.get('/chat/:key', async (req, res) => {
+    req = await setUserTokenIds(req, res)
     console.log(getETA())
-    const key = req.params.key;
-    let convo_tree = await find_load_make_convo(key, null);
-    res.render('chat', { convo_tree });
+    let key = req.params.key;
+    if(req.query.convo != null) { 
+        key = req.query.convo;
+    }
+    let convo_tree = await find_load_make_convo(key, null, make=true, req);
+    if(req.query.convo != null) {
+        res.json(convo_tree);
+    } else {
+        res.render('chat', { convo_tree });
+    }
 });
 
 app.post('/notify', async (req, res) => {
@@ -91,7 +153,7 @@ app.get('/', (req, res) => {
 });
 
 app.post('/prompt_internal', async (req, res) => {
-	if(await checkServerAuth(req,res) == false) return;
+	req = await setUserTokenIds(req, res)
     const replyContent = req.body;
     let convo_tree = await find_load_make_convo(replyContent.conversationId);
     let eventStreamer = event_streamers[convo_tree.conversationId]; 
@@ -103,7 +165,7 @@ app.post('/prompt_internal', async (req, res) => {
     let responseTo = new_reply.toJSON();
     eventStreamer.broadcastEvent({
         event_name: 'user_reply_committed',
-        messageuuid: responseTo.messagenodeUuid,
+        messagenodeUuid: responseTo.messagenodeUuid,
         conversationId: convo_tree.conversationId,
         textContent: responseTo.textContent
     });
@@ -128,27 +190,30 @@ app.get('/eta', async(req,res) => {
 });
 
 app.post('/chat_commands/:key', async (req, res) => {
+    req = await setUserTokenIds(req, res)
     const replyContent = req.body;
     const key = req.params.key;
-    let convo_tree = await find_load_make_convo(replyContent.conversationId, null);
+    let convo_tree = await find_load_make_convo(replyContent.conversationId, res, make=true, req);
     //let eventStreamer = event_streamers[convo_tree.conversationId]; 
     let assistant = asst_cache[convo_tree.conversationId];
     if(key.endsWith('_reply')) {
         let replyTo = convo_tree.getNodeByUuid(replyContent.replyingTo);
-        if(key == 'user_reply') {
-            replyTo = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent, true);
-            replyTo.conversationId = convo_tree.conversationId;
+        if(replyTo != null) {
+            if(key == 'user_reply') {
+                replyTo = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent, true);
+                replyTo.conversationId = convo_tree.conversationId;
+            }
+            /*eventStreamer.broadcastEvent({
+                event_name: 'reply_committed',
+                payload: new_reply.toJSON()
+            });*/
+            //save to disk after the assistant replies.
+            initAssistantResponseTo(assistant, replyTo,
+                (genned_reply) => {
+                    const filePath = getConvoPath(convo_tree.conversationId);
+                    convo_tree.save(fs, filePath);
+                });
         }
-        /*eventStreamer.broadcastEvent({
-            event_name: 'reply_committed',
-            payload: new_reply.toJSON()
-        });*/
-        //save to disk after the assistant replies.
-        initAssistantResponseTo(assistant, replyTo,
-            (genned_reply) => {
-                const filePath = getConvoPath(convo_tree.conversationId);
-                convo_tree.save(fs, filePath);
-            });
     }
     if(key == "cancel_request") {
         assistant.cancelRequest();
@@ -156,8 +221,9 @@ app.post('/chat_commands/:key', async (req, res) => {
 })
 
 app.get('/chat_events/:key', async (req, res) => {
+    req = await setUserTokenIds(req, res)
     const key = req.params.key;
-    const conversation = await find_load_make_convo(key, res, true);
+    const conversation = await find_load_make_convo(key, res, true, req);
     /*if(conversation != null) {
         event_streamers[conversation.conversationId].registerListener(res);
     }   
@@ -171,13 +237,24 @@ app.get('/chat_events/:key', async (req, res) => {
 });
 
 
-app.post('/expand_chunk', async (req, res) => { 
+app.post('/expand_chunk', async (req, res) => {
+    if(! await checkServerAuth(req, res)) return;  
     const rc = req.body;   
     let result = await _localExpandChunk(rc.input_chunk, rc.n_before, rc.n_after);
     res.json(result);
 });
 
 app.post('/get_similarity', async (req, res) => { 
+    if(! await checkServerAuth(req, res)) return; 
+    const rc = req.body;
+    let embeddings_list = rc.embeddings_list;
+    let granularities = rc.granularities_list;
+    let additionalFilters = rc.additional_filters;
+    let result = await _localgetSimilarEmbeddings(embeddings_list, granularities, additionalFilters);
+    res.json(result)    
+});
+app.post('/get_endpoints', async (req, res) => {
+    if(! await checkServerAuth(req, res)) return; 
     const rc = req.body;
     let embeddings_list = rc.embeddings_list;
     let granularities = rc.granularities_list;
@@ -187,17 +264,17 @@ app.post('/get_similarity', async (req, res) => {
 });
 
 
-app.get('/events/', function(req, res) {
-    const evst = new EventStreamer(res);
+app.get('/events/:user_token', async (req, res) => {
+    const evst = new EventStreamer(res, req.user_id);
     let textstream = dummy_text.asyncIntGen(50, 100);
     let accumulated = "";
     (async () => {
         for await (const chunk of textstream) {
             let deltachunk = chunk.choices[0]?.delta?.content || ""
             accumulated += ' '+deltachunk;
-            evst.broadcastEvent({ event_name: 'pingchunk', chunk_content: deltachunk, timestamp: new Date() });
+            evst.broadcastEvent({ event_name: 'pingchunk', chunk_content: deltachunk, timestamp: new Date()}, req.user_id );
         }
-        evst.broadcastEvent({ event_name: 'commit', content: accumulated, timestamp: new Date() });
+        evst.broadcastEvent({ event_name: 'commit', content: accumulated, timestamp: new Date() }, req.user_id );
         
         console.log('Client disconnected');
         evst.removeListener(res);
@@ -206,7 +283,7 @@ app.get('/events/', function(req, res) {
 
 
 /*retrieves convo from cache if available, or file if not available, or new convo if neither*/
-async function find_load_make_convo(key, res, make=true){
+async function find_load_make_convo(key, res, make=true, req = {user_id:'global'}){
     let convo_tree = null;
     let asst = null;
     convo_tree = conversation_cache[key];        
@@ -214,21 +291,30 @@ async function find_load_make_convo(key, res, make=true){
         const filePath = getConvoPath(key);
         convo_tree = await convos.Convo.load(fs, filePath);
         if(convo_tree != null) {
-            conversation_cache[convo_tree.conversationId] = convo_tree;
-            asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+            if(convo_tree.conversationId == null ) {
+                convo_tree.conversationId = key;
+            }
+            if(convo_tree.user_id == null)
+                convo_tree.user_id = 'global'
+            if(convo_tree.user_id != req.user_id && convo_tree.user_id != 'global') {
+                convo_tree = null;
+            } else {
+                conversation_cache[convo_tree.conversationId] = convo_tree; 
+                asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+            }
         }
     }
     if(convo_tree == null) {
         let convo_uuid = key;
         convo_tree = new convos.Convo(convo_uuid);
+        convo_tree.user_id = req.user_id;
         conversation_cache[convo_tree.conversationId] = convo_tree;
         convo_tree.initRoot();
         const filePath = getConvoPath(convo_tree.conversationId);
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
         convo_tree.save(fs, filePath)
-    } 
-/*    
-	    else {
+    }
+    else {
         convo_tree = conversation_cache[key];        
     }
  
@@ -236,30 +322,46 @@ async function find_load_make_convo(key, res, make=true){
         const filePath = getConvoPath(key);
         convo_tree = await convos.Convo.load(fs, filePath);
         if(convo_tree != null) {
-            conversation_cache[convo_tree.conversationId] = convo_tree;
-            asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+            if(convo_tree.user_id == null)
+                convo_tree.user_id = 'global'
+            if(convo_tree.user_id != req.user_id && convo_tree.user_id != 'global') {
+                convo_tree = null;
+            } else {
+                conversation_cache[convo_tree.conversationId] = convo_tree;
+                asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
+            }
         }
     }
     convo_tree = conversation_cache[key];
     if(convo_tree == null && make) {
         let convo_uuid = uuidv4();
         convo_tree = new convos.Convo(convo_uuid);
+        convo_tree.user_id = req.user_id;
         convo_tree.initRoot();
         conversation_cache[convo_tree.conversationId] = convo_tree;
         const filePath = getConvoPath(convo_tree.conversationId);
         asst_cache[convo_tree.conversationId] = initAsstFor(convo_tree);
         convo_tree.save(fs, filePath)
     }
-*/
+
     if(convo_tree != null) {
-        if(event_streamers[convo_tree.conversationId] == null)
-            event_streamers[convo_tree.conversationId] = new EventStreamer(res);
-            asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
+        if(convo_tree.user_id == null)
+            convo_tree.user_id = 'global'        
+        if(convo_tree.user_id != req.user_id && convo_tree.user_id != 'global') {
+            convo_tree = null;
+        } else {
+            if(event_streamers[convo_tree.conversationId] == null) {
+                event_streamers[convo_tree.conversationId] = new EventStreamer(res);
+                asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
+            }
+        }
     }
 
     let streamer = event_streamers[convo_tree.conversationId];
+    
     if(res != null) 
         streamer.registerListener(res);
+
     convo_tree.on_textContent_change = (newNode) => {
         let currStream = event_streamers[convo_tree.conversationId];
         currStream.broadcastEvent({
@@ -294,7 +396,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
     let streamer = event_streamers[responseTo.conversationId];
     streamer.broadcastEvent({
         event_name: 'asst_reply_init',
-        messageuuid: data.messagenodeUuid,
+        messagenodeUuid: data.messagenodeUuid,
         conversationId: data.conversationId,
         responseTo: responseTo.toJSON().messagenodeUuid,
         payload: resultNode.toJSON()
@@ -312,7 +414,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         streamer.broadcastEvent({
             event_name: 'asst_reply_committed',
             textContent:resultNode.textContent,
-            messageuuid: data.messagenodeUuid,
+            messagenodeUuid: data.messagenodeUuid,
          	conversationId: data.conversationId,
          	responseTo: responseTo.toJSON().messagenodeUuid,
             payload: resultNode.toJSON()
@@ -328,7 +430,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         let data = forNode.toJSON();
         streamer.broadcastEvent({
             event_name: 'asst_state_updated',
-            messageuuid: data.messagenodeUuid, 
+            messagenodeUuid: data.messagenodeUuid, 
 	        conversationId: data.conversationId,
 	        state: data.state,
 	        responseTo: responseToPar.toJSON().messagenodeUuid,
@@ -361,31 +463,6 @@ async function checkServerAuth(req,res) {
 	return false;        
 }
 
-async function logFullResponse(response) {
-    // Log response status and status text
-    console.log(`Status: ${response.status}`);
-    console.log(`Status Text: ${response.statusText}`);
-
-    // Log headers
-    console.log('Headers:');
-    response.headers.forEach((value, key) => {
-        console.log(`${key}: ${value}`);
-    });
-
-    try {
-        // Log body
-        const contentType = response.headers.get('content-type');
-        let responseBody;
-        if (contentType && contentType.includes('application/json')) {
-            responseBody = await response.json();
-        } else {
-            responseBody = await response.text();
-        }
-        console.log('Body:', responseBody);
-    } catch (error) {
-        console.error('Error reading response body:', error);
-    }
-}
 
 export async function doFetchPost(url, data) {    
     try {
@@ -400,3 +477,26 @@ export async function doFetchPost(url, data) {
         console.error(error.response.body);
     }
 }
+
+function decrypt(key, salt, encryptedData) {
+    try {
+        const hashedKey = crypto.createHash('sha256').update(key+salt).digest();
+        const dataBuffer = Buffer.from(encryptedData, 'base64');
+
+        const ivLength = crypto.getCipherInfo('aes-256-cbc').ivLength;
+        const iv = dataBuffer.slice(0, ivLength);
+        const ciphertext = dataBuffer.slice(ivLength);
+        
+        const decipher = crypto.createDecipheriv('aes-256-cbc', hashedKey, iv);
+        let decrypted = decipher.update(ciphertext);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+        return decrypted.toString();
+    } catch(e) {
+        throw new Error(e);
+    }
+}
+
+
+
+

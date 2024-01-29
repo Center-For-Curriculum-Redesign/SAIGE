@@ -75,12 +75,13 @@ export const justrun = new AnalysisNode(
                 null,
                 false);
         
-        ultimateMessageNode.appendContent(s.in_packets.inject_speech || '');
+        ultimateMessageNode.appendContent(s.in_packets.inject_speech || '', true);
 
         const stream = await client.completions.create({//clientHandler({
                 model: model_name,
                 prompt: active_modded_prompt,
-                temperature: 0.2,
+                temperature: 0.3,
+                min_p: 0.25,
                 stream: true,
                 max_tokens: 8092
             });
@@ -231,11 +232,11 @@ As a general rule of thumb, you should invoke the search tool whenever the user 
 2. You should NEVER recommend any resources other than those returned by a search, as we can only guarantee the availability of the resources that the search tool returns.
 3. Use of the search tool is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.
 4. The search tool provides access to education research articles ONLY. It is not a general search tool for arbitrary information.
-5. IMPORTANT: When citing a search result, you MUST do so using the <meta-citation> tags. Do not use any citation format other than direct <meta-citation> references to the searchresults.
+5. IMPORTANT: When citing a search result, you MUST do so using the <meta-citation> tags. Do not use any citation format other than direct inline <meta-citation> references to the searchresults. This is because the chat system will automatically generate a bibliography with navigable links for the user based on the citations you provide. If you manually write out a bibliography, it will just confuse the user and clutter their chatlog with unusable information.
 
 If ever you wish to think through something in private without pestering the user with the details of your thought process, you can do so inside of meta-thought tags by writing \`<meta-thought>some text that will be hidden from the user, but still visible to you as a scratch pad,</meta-thought>\`. 
 
-You should always do your best fulfill the user's request (so long as it is legal). If a request seems ill-advised, you may make note of the pitalls, but first and foremost you should fulfill the request, even if you think you would not do it very well.`);
+You should always do your best fulfill the user's request (so long as it is legal). If a request seems ill-advised, you may make note of the pitfalls, but first and foremost you should fulfill the request, even if you think you would not do it very well.`);
 
 /*For example, if a math teacher wants research backed advice about how to more effectively teach ESL students you might write
 

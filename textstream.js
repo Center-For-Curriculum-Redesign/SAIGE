@@ -179,7 +179,7 @@ app.post('/prompt_internal', async (req, res) => {
         messagenodeUuid: responseTo.messagenodeUuid,
         conversationId: convo_tree.conversationId,
         textContent: responseTo.textContent
-    });
+    }, req.user_id);
     res.json(new_reply);
 
 // test code, with dummy respons
@@ -190,7 +190,7 @@ app.post('/prompt_internal', async (req, res) => {
         (genned_reply) => {
             const filePath = getConvoPath(convo_tree.conversationId);
             convo_tree.save(fs, filePath);
-        }
+        }, req.user_id
     );
 
 });
@@ -383,7 +383,7 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         currStream.broadcastEvent({
             event_name: 'content_change',
             payload: newNode.nodeInfo
-        })
+        }, req.user_id)
 
     }
     convo_tree.on_structure_change = (newNode)=> {
@@ -391,7 +391,7 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         currStream.broadcastEvent({
             event_name: 'structure_change',
             payload: newNode
-        })
+        }, req.user_id)
     };
     return convo_tree
 }
@@ -405,7 +405,7 @@ function initAsstFor(convoTree, evst){
     return newAsst;
 }
 
-function initAssistantResponseTo(asst, responseTo, commit_callback) {
+function initAssistantResponseTo(asst, responseTo, commit_callback, user_id) {
     let resultNode = new convos.MessageHistories('assistant', '');
     resultNode.setIntendedParentNode(responseTo);
     let data = resultNode.toJSON();
@@ -416,7 +416,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         conversationId: data.conversationId,
         responseTo: responseTo.toJSON(),
         payload: resultNode.toJSON()
-    })
+    }, user_id)
     asst.on_commit = (commit_packet, byasst, throughNode) => {
         let responseTo = throughNode?.parentNode ?? responseTo;
         responseTo.addChildReply(resultNode);
@@ -434,7 +434,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
          	conversationId: data.conversationId,
          	responseTo: responseTo.toJSON().messagenodeUuid,
             payload: resultNode.toJSON()
-       })
+       }, user_id)
     };
 
     asst.on_state_change  = (generate_packet, byasst, throughNode) => {
@@ -451,7 +451,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
 	        state: data.state,
 	        responseTo: responseToPar.toJSON().messagenodeUuid,
             payload: forNode.toJSON()
-        })
+        }, user_id)
     };
 /*
     asst.on_generate  = (generate_packet, byasst) => {
@@ -463,7 +463,7 @@ function initAssistantResponseTo(asst, responseTo, commit_callback) {
         streamer.broadcastEvent({
             event_name: 'asst_reply_updated',
             payload: data
-        })
+        }, user_id)
     };
 */
     try {

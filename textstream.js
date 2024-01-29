@@ -1,6 +1,5 @@
 await import('dotenv/config');
 import express from 'express';
-import morgan from 'morgan';
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -29,14 +28,6 @@ const credentials = { key: privateKey, cert: certificate };
 const ccrkey = process.env.CCR_KEY;
 const port = 3333;
 const httpsServer = createSecureServer(credentials, app);
-
-httpsServer.on('error', (err)=> {
-    console.error('Server failed to start:', err);
-});
-httpsServer.listen(port, (err) => {
-    console.log(`HTTPS Server running on port ${port}`);
-});
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONVO_DIR = path.join(__dirname, 'conversations'); 
 const ENDPOINT_DIR = path.join(__dirname, 'endpoints_available'); 
@@ -62,15 +53,19 @@ function getConvoPath(key) {
     return path.join(CONVO_DIR, `${key}.json`);
 }
 
+const pdfDirectory = path.join(__dirname, '../processed/pdfs');
+
 app.use(express.static('static'));
 app.use(express.json());
 app.set('view engine', 'ejs');
 app.set('views', './views');
-app.use(morgan('combined'));
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
-});
+app.use('/doc', express.static(pdfDirectory, {
+    index: false,
+    immutable: true,
+    cacheControl: true,
+    maxAge: "30d"
+}));
+
 
 const conversation_cache = {}; //map of conversationuuids to conversation objects.
 const asst_cache = {}; //map of conversationuuids to assistant instances.
@@ -490,7 +485,10 @@ export async function doFetchPost(url, data) {
         const response = await got.post(url, {
             http2: true,
             json: data,
-            responseType: 'json'
+            responseType: 'json',
+            headers: {
+                "Authorization": `Bearer ${ccrkey}`
+            }
         });
 
         return response.body;
@@ -518,6 +516,15 @@ function decrypt(key, salt, encryptedData) {
     }
 }
 
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).send('Something broke!');
+});
 
 
-
+httpsServer.on('error', (err)=> {
+    console.error('Server failed to start:', err);
+});
+httpsServer.listen(port, (err) => {
+    console.log(`HTTPS Server running on port ${port}`);
+});

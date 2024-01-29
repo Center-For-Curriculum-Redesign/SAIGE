@@ -23,13 +23,16 @@ Your task is to read through this result, and carefully consider whether it is r
 After reasoning aloud, please indicate your decision within <meta-decision> tags.\
 \
 The available decisions are:\
-##KEEP-3## : This result directly and unambiguously answers the question the researcher is asking, and should be presented to the researcher.\
-##KEEP-2## : This result does not provide a definitive answer, but does contain highly relevant information the researcher will likely wish to be aware of.\
-##KEEP-1##: This result may be useful in conjunction with other results, though the information it offers seems somewhat tangential or otherwise insufficient to be of use on its own.\
+##KEEP-3## : The result directly and unambiguously answers the question the researcher is asking, and should be presented to the researcher.\
+##KEEP-2## : The result does not provide a definitive answer, but does contain highly relevant information the researcher will likely wish to be aware of.\
+##KEEP-1##: The result may be useful in conjunction with other results, though the information it offers seems somewhat tangential or otherwise insufficient to be of use on its own.\
 ##EXPAND## : The result looks promising, but its helpfulness appears limited due to truncation.\
 ##DISCARD## : This result isn't very helpful, or is otherwise just a disembodied list of references and should not be presented to the researcher. If the result is a reference which seems like it may be useful, the INVESTIGATE tag is probably more appropriate.\
 ##INVESTIGATE## : This result isn't super helpful on its own, but does reference another document or section worth searching for.\
-Your final decision should be placed inside of <meta-decision> tags. For example, if you believe the result should be kept, your response should end with <meta-decision>##KEEP##</meta-decision>\
+\
+It is critically important that you never select any level of 'KEEP' on a result if it is just a list of references. The only valid choices for lists of references are '##DISCARD##' and '##INVESTIGATE##'.\
+\
+Your final decision should be placed inside of <meta-decision> tags. For example, if you believe the result might potentially be useful, your response would end with <meta-decision>##KEEP-1##</meta-decision>\
 ");
 
 function augment(output, withobj) {

@@ -8,13 +8,11 @@ export const getType = (obj) => obj?.constructor?.name || Object.prototype.toStr
 
 export class Convo {
     constructor(conversationId, systemStartText, startSequence = null, startKvCache = null, formatter = null, tokenizer = null) {
-        this.messageMap = {};        
-        
-        this.activePath = null;
+        this.messageMap = {}; 
+        this.activePath = "root";
         this.systemPrompt = systemStartText;
         this.formatter = formatter;
         this.conversationId = conversationId;
-        // Additional initialization if needed
     }
 
     initRoot(rootNode = null) {
@@ -25,8 +23,9 @@ export class Convo {
             this.messages = new MessageHistories(null, null, this.conversationId, this);
             this.messages.setNodeId('root');
         } else {
-            this.messages = rootNode;
+            this.messages = rootNode;            
         }
+        this.activePath = "root";
         this.messageMap[this.messages.messagenodeUuid] = this.messages;
     }
 
@@ -56,7 +55,7 @@ export class Convo {
         let new_node = new MessageHistories(author, textContent, this.conversationId, this);
         if (this.messages === null) {
             this.messages = new_node;
-            new_node.setNodeId("0");
+            new_node.setNodeId("root");
             if(notify) {
                 this._on_structure_change('node_added', new_node);
             }
@@ -154,7 +153,6 @@ export class Convo {
      * {
      *      event_name: 'node_state_changed',
      *      previous: the previous state,
-     *      nodeInfo: {//JSON of the MessageHistoryNode that was added or removed.
      *  }
      * The redundancy in naming is so you can be less careful with how you wrap the payload when broadcasting. 
      * Please be as irresponsible as possible.
@@ -174,6 +172,7 @@ export class Convo {
                 previous: previous_state,
                 previous_state: previous_state,
                 prev_state: previous_state,
+                state: nodeInfo_uw.state,
                 nodeInfo : nodeInfo_uw.toJSON()
             }
             this.on_content_change(infoObj);
@@ -195,12 +194,14 @@ export class Convo {
             activePath : this.activePath,  
             systemPrompt : showPrompt,          
             conversationId : this.conversationId,
-            messagenodeUuid : this.conversationId
+            messagenodeUuid : this.conversationId,
+            user_id: this.user_id
         };
     }
 
     static fromJSON(json) {
         let newConvo = new Convo(json.conversationId, json.systemPrompt);
+        newConvo.user_id = json.user_id;
         newConvo.activePath = json.activePath;
         newConvo.initRoot(MessageHistories.fromJSON(json.messages, null, newConvo.conversationId, newConvo));
         return newConvo;
@@ -224,7 +225,7 @@ export class Convo {
 
 
 export class MessageHistories {
-    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null) {
+    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null, title=null) {
         this.nodeId = null;
         this.messagenodeUuid = messagenodeUuid || uuidv4();
         this.conversationId = conversationId;
@@ -233,10 +234,16 @@ export class MessageHistories {
         this.thoughts = {};
         this.thoughtsByUuid = {};
         this.textContent = textContent;
+        this.title = title;
         this.author = author;
         this.parentNode = null;
         this.state = (this.author == 'user' || this.author == 'system') ? 'committed' : 'init';
         if(conversation_node) this.conversation_node?.register(this);
+    }
+
+    setTitle(title, notify=true) {
+        this.title = title;
+        this._on_content_change(this.textContent, this.textContent);
     }
 
     getNode(subnodeString, fullSequence = null) {
@@ -248,7 +255,11 @@ export class MessageHistories {
     }
 
     setState(newState, notify = false) {
+        let prevstate = this.state;
         this.state = newState;
+        if(notify) {
+            this.conversation_node._on_state_change(this, prevstate);
+        }
     }
     getState() {
         this.state;
@@ -330,7 +341,7 @@ export class MessageHistories {
      * @param {string} newContent 
      */
     _on_content_change(prevContent, newContent) {
-        let info
+        let info = {};
         if(prevContent != null) {
             info = this.toJSON(); 
             info['prev_textContent'] = prevContent;
@@ -340,12 +351,14 @@ export class MessageHistories {
                 conversationId : this.conversationId,
                 deltaChunk: newContent,
                 nodeType: getType(this),
-                parentNodeUuid: this.parentNodeUuid 
+                parentNodeUuid: this.parentNodeUuid,
+                title: this.title 
             }
         }
-        if(this.on_content_change == null && this.conversation_node != null) {            
+        if(this.conversation_node != null) {            
             this.conversation_node._on_textContent_change(info);
-        } else if(this.on_content_change != null) {
+        }
+        if(this.on_content_change != null) {
             this.on_content_change(info);
         }
     }
@@ -449,22 +462,28 @@ export class MessageHistories {
         }
         let splitted = subnodeString.split("#", 2);
         let toGet = splitted[0];
-        if (splitted.length === 1) {
-            if (toGet !== this.nodeId) {
-                throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
-            } else {
+        if (splitted.length === 1 && toGet == this.nodeId) {
+            //if (toGet !== this.nodeId) {
+            //    throw new Error('node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString);
+            //} else {
                 return [this];
-            }
-        } else if (splitted.length > 1) {
-            let nextDesc = splitted[1].split("#", 2)[0];            
-            if (nextDesc in this.children) {
-                //this.activeDescendants = nextDesc;
-                return [this].concat(this.children[nextDesc].historyAsList(splitted[1], fullSequence));
-            } else {
+            //}
+        } else if (splitted.length > 1 || toGet != this.nodeId) {
+            if(splitted.length > 1) {
+                let nextDesc = splitted[1].split("#", 2)[0];      
+                if (nextDesc in this.children) {
+                    //this.activeDescendants = nextDesc;
+                    return [this].concat(this.children[nextDesc].historyAsList(splitted[1], fullSequence));
+                }
+            } else if(toGet == this.nodeId) {
                 return [this];
+            } else {
+                let err = 'node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString;
+                throw new Error(err);
             }
         }
-        throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
+        let err = 'node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString;
+        throw new Error(err);
     }
 
     // Converts the current object and its children to a JSON object
@@ -490,6 +509,7 @@ export class MessageHistories {
             textContent: this.textContent,
             author: this.author,
             state: this.state,
+            title: this.title,
             parentNodeId: this.getParentNode()?.getNodeId(),
             parentNodeUuid: this.getParentNode()?.messagenodeUuid
             // parentNode is omitted to avoid circular references
@@ -498,7 +518,7 @@ export class MessageHistories {
 
     // Static method to create a MessageHistories object from a JSON object
     static fromJSON(json, parentNode = null, conversation_id, conversation_node) {
-        let messageHistory = new MessageHistories(json.author, json.textContent, conversation_id, conversation_node, json.messagenodeUuid);
+        let messageHistory = new MessageHistories(json.author, json.textContent, conversation_id, conversation_node, json.messagenodeUuid, json.title);
         messageHistory.activeDescendants = json.activeDescendants;
         messageHistory.nodeId = json.nodeId;
         messageHistory.parentNode = parentNode;
@@ -522,13 +542,9 @@ export class MessageHistories {
 }
 
 export class ThoughtHistories extends MessageHistories {
-    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null, thoughtTitle) {
-        super(author, textContent, conversationId, conversation_node , messagenodeUuid = null);
-        this.thoughtTitle = thoughtTitle;
-    }
-
-    setThoughtTitle(thoughtTitle) {
-        this.thoughtTitle = thoughtTitle;
+    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null, title=null) {
+        super(author, textContent, conversationId, conversation_node , messagenodeUuid = null, title);
+        
     }
 
     static fromJSON(json, parentNode = null, conversation_id, conversation_node) {
@@ -557,13 +573,12 @@ export class ThoughtHistories extends MessageHistories {
     toJSON() {
         let supJ = super.toJSON();
         supJ['thoughtType'] = this.thoughtType;
-        supJ['thoughtTitle'] = this.thoughtTitle;
         return supJ;
     }
 
     addChildReply(newMessageNode, notify=false) {
         newMessageNode.thoughtType = "thoughtReply"; 
-        return super.addChildReply(newMessageNode);
+        return super.addChildReply(newMessageNode, notify);
     }
 
     /**returns the closest ancestor of this node which is of type MessageHistory */
@@ -578,5 +593,3 @@ export class ThoughtHistories extends MessageHistories {
         }
     }
 }
-
-

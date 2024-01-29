@@ -496,7 +496,7 @@ export class FilteredFeed {
      */
     async * feed(streamin, extractor = this.defaultExtractor) {        
         this.reset();
-        console.log("reset")
+        //console.log("reset")
         this.debug = [];
         //let stream = await streamin();
         for await (const chunk of streamin) {

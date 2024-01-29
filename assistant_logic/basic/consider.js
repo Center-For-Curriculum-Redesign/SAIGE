@@ -58,12 +58,16 @@ export function ponderPromptInst(newAsst, endpoints_available) {
 
     let metaSeq = new AnalysisNode(async(s = {/*convo_branch, assistant, prompt_coordinator*/} )=> {
         let ETA = getETA();
-        let needs_search = await determine_search_necessity.run(s.convo_branch, s.assistant, {});        
+        let needs_search = await determine_search_necessity.run(s.convo_branch, s.assistant, {});
+        let outerThought = needs_search.current_thought;        
         let justrun_result = {};
-        if(needs_search?.on_complete?.exec_continue)
+        if(needs_search?.on_complete?.exec_continue) {
+            outerThought.setTitle("Done thinking.", true);
             justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : needs_search.on_complete.thought_result});
-        else if(needs_search?.on_complete?.exec_search != null) {
-            let curated_results = await doSearchSeq(s);
+        }
+        if(needs_search?.on_complete?.exec_search != null) {
+            let curated_results = await doSearchSeq(s, outerThought);
+            outerThought.setTitle("Finished searching.", true);
             let sorted_results = curated_results.pruned_results.sort((a, b) => a.keepScore - b.keepScore);
             let top_results = sorted_results.slice(0, Math.min(sorted_results.length, MAX_RESULTS_CONSIDERED))
             let thoughtString = "I've performed a search over the research articles in my database";
@@ -73,8 +77,8 @@ export function ponderPromptInst(newAsst, endpoints_available) {
                 \n${r.text_content}\n</meta-searchresult>\n`;
                 thoughtString += resultString;
             }
-            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use the <meta-citation> tags in conjunction with the result_ids to directly reference articles for the user." : "";
-            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech: `According to <meta-citation result_id="${top_results[0].article_id}"><sup>1</sup></meta-citation>`});
+            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use the <meta-citation> tags in conjunction with the result_ids to provide inline rerences to the articles for the user. (The new chat system will conveniently generate a bibliograpghy for me from my inline citations, so I will avoid explicitly providing one at the end)" : "";
+            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech: `According to <sup><meta-citation result_id="${top_results[0].article_id}">1</meta-citation></sup>`});
             let resultNode = s.convo_branch[s.convo_branch.length-1] 
             resultNode.citations = top_results;
         }
@@ -82,17 +86,19 @@ export function ponderPromptInst(newAsst, endpoints_available) {
     });
 
 
-    let doSearchSeq = async (s) => {
+    let doSearchSeq = async (s, outerThought) => {
+        outerThought.setTitle("Generating queries...", true);
         let crafted_search = await aggregated_search.run(s.convo_branch, s.assistant, {});
         //let search_results = {'to_rank': testresult.candidates}
-
+        outerThought.setTitle("Running search...", true);
         let search_results = await retriever.run(s.convo_branch, s.assistant,
             {
                 queries: crafted_search.on_complete.queries,
                 n_queries: 5, //how many of the generated search queries to execute
                 k_per_query: 5, //how many results to return per query executed
             }, retriever);
-
+        
+        outerThought.setTitle("Ranking search results...", true);
         let preranked_results = await pre_ranker.run(s.convo_branch,  s.assistant,
             {
                 candidates: search_results.to_rank,
@@ -105,7 +111,8 @@ export function ponderPromptInst(newAsst, endpoints_available) {
                 n_out: 10, //number of results to return
             }
         )
-
+        
+        outerThought.setTitle("Reasoning over contents...", true);
         let curated = await aggregate_result_usefulness.run(s.convo_branch, s.assistant, {ranked_results: preranked_results.ranked_results});
         return curated;
     }
@@ -207,6 +214,7 @@ const determine_search_necessity = new AnalysisNode(
         let determinationString = thoughtResult.on_complete.exec_search == null ? "CONVERSE" : "SEARCH";   
         currentThought.appendContent("\n\nDetermination: "+determinationString)
         thoughtResult.on_complete.thought_result = currentThought.getContent();
+        thoughtResult.current_thought = currentThought;
         return thoughtResult;
     }
 );

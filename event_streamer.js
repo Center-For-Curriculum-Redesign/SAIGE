@@ -39,13 +39,14 @@ export class EventStreamer {
             throw new Error("User_id required");
         }
         res.user_id = user_id;
+        if(this.listeners.includes(res)) {
+            return;
+        }
         res.req.on('close', () => {
             this.removeListener(res);
             console.log('Client disconnected');
         });
-        if(this.listeners.includes(res)) {
-            return;
-        }
+        
         const headers = {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',

@@ -39,19 +39,25 @@ httpsServer.listen(port, (err) => {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONVO_DIR = path.join(__dirname, 'conversations'); 
-const ENDPOINT_DIR = path.join(__dirname, 'endpoints_available/known_endpoints.json'); 
+const ENDPOINT_DIR = path.join(__dirname, 'endpoints_available'); 
 
 /*php will send claims about which user_id maps to which token. The tokens are generated
 by our shared_key + a salt string php provides when declaring a user. 
 We store the salt string, and whenever a user asks us for stuff, we take their token and decrypt it with key+salt
 */
-const TOKEN_USER_MAP = {
-}
 
 
 if (!fss.existsSync(CONVO_DIR)) {
     fss.mkdirSync(CONVO_DIR, { recursive: true });
 }
+
+let TOKEN_USER_MAP = {};
+try {
+    TOKEN_USER_MAP = JSON.parse(fss.readFileSync(ENDPOINT_DIR+'/known_users.json', 'UTF-8'));
+} catch(e) {
+    console.log("oh no");
+}
+
 function getConvoPath(key) {
     return path.join(CONVO_DIR, `${key}.json`);
 }
@@ -70,7 +76,7 @@ const conversation_cache = {}; //map of conversationuuids to conversation object
 const asst_cache = {}; //map of conversationuuids to assistant instances.
 const event_streamers = {}; //map of conversationuuids to sse event streams.
 //map of models to urls
-export const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR, 'utf8'));
+export const endpoints_available = JSON.parse(fss.readFileSync(ENDPOINT_DIR+'/known_endpoints.json', 'utf8'));
 console.log(endpoints_available);
 
 async function setUserTokenIds(req, res) {
@@ -85,6 +91,7 @@ async function setUserTokenIds(req, res) {
             // this is just there to check that a user talking to this server is who s/he claims to be on the php server
             TOKEN_USER_MAP[user_token] = {'salt': salt, 'user_id': user_id}
             req.user_id = user_id
+            await fs.writeFile(ENDPOINT_DIR+'/known_users.json', JSON.stringify(TOKEN_USER_MAP), 'utf8');
         } else { //branch for claims from whoever-the-fuck.            
             let token = req?.token || req?.body?.token || req?.params?.token || req?.query?.token; 
             if(TOKEN_USER_MAP[token]) {
@@ -110,12 +117,14 @@ async function setUserTokenIds(req, res) {
 }
 
 app.get('/chat/', async (req, res) => {
+    if(! await forceServerAuth(req, res)) return;
     req = await setUserTokenIds(req, res)
+    console.log('hit /chat/')
     let key = 'new';
     if(req.query.convo) {
         key = req.query.convo;
     }
-    let convo_tree = await find_load_make_convo(null, res, true, req);
+    let convo_tree = await find_load_make_convo(null, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -124,13 +133,12 @@ app.get('/chat/', async (req, res) => {
 })
 
 app.get('/chat/:key', async (req, res) => {
+    if(! await forceServerAuth(req, res)) return; 
     req = await setUserTokenIds(req, res)
-    console.log(getETA())
+    //console.log(getETA())
+    console.log('hit /chat/:key')
     let key = req.params.key;
-    if(req.query.convo != null) { 
-        key = req.query.convo;
-    }
-    let convo_tree = await find_load_make_convo(key, res, true, req);
+    let convo_tree = await find_load_make_convo(key, null, true, req);
     if(req.query.convo != null) {
         res.json(convo_tree);
     } else {
@@ -139,11 +147,12 @@ app.get('/chat/:key', async (req, res) => {
 });
 
 app.post('/notify', async (req, res) => {
+    console.log('hit /notify');
     const model_registration = req.body;
     if(model_registration?.notification_type == "register") {
         endpoints_available[model_registration.model_available] = endpoints_available[model_registration.model_available] ||[];
         endpoints_available[model_registration.model_available] = [model_registration.access_url, ...endpoints_available[model_registration.model_available]];
-        fs.writeFile(ENDPOINT_DIR, JSON.stringify(endpoints_available));
+        fs.writeFile(ENDPOINT_DIR+'/known_endpoints.json', JSON.stringify(endpoints_available));
     }
     res.send();
 });
@@ -153,9 +162,11 @@ app.get('/', (req, res) => {
 });
 
 app.post('/prompt_internal', async (req, res) => {
+    if(! await forceServerAuth(req, res)) return; 
 	req = await setUserTokenIds(req, res)
+    console.log('hit /prompt_internal');
     const replyContent = req.body;
-    let convo_tree = await find_load_make_convo(replyContent.conversationId);
+    let convo_tree = await find_load_make_convo(replyContent.conversationId, null, true, req);
     let eventStreamer = event_streamers[convo_tree.conversationId]; 
     let assistant = asst_cache[convo_tree.conversationId];
     let new_reply = replyContent.replyingTo
@@ -191,6 +202,7 @@ app.get('/eta', async(req,res) => {
 
 app.post('/chat_commands/:key', async (req, res) => {
     req = await setUserTokenIds(req, res)
+    console.log('hit /chat_commands/:key');
     const replyContent = req.body;
     const key = req.params.key;
     let convo_tree = await find_load_make_convo(replyContent.conversationId, res, true, req);
@@ -222,6 +234,7 @@ app.post('/chat_commands/:key', async (req, res) => {
 
 app.get('/chat_events/:key', async (req, res) => {
     req = await setUserTokenIds(req, res)
+    console.log('hit /chat_events');
     const key = req.params.key;
     const conversation = await find_load_make_convo(key, res, true, req);
     /*if(conversation != null) {
@@ -239,6 +252,7 @@ app.get('/chat_events/:key', async (req, res) => {
 
 app.post('/expand_chunk', async (req, res) => {
     if(! await forceServerAuth(req, res)) return;  
+    console.log('hit /force_chunk');
     const rc = req.body;   
     let result = await _localExpandChunk(rc.input_chunk, rc.n_before, rc.n_after);
     res.json(result);
@@ -246,6 +260,7 @@ app.post('/expand_chunk', async (req, res) => {
 
 app.post('/get_similarity', async (req, res) => { 
     if(! await forceServerAuth(req, res)) return; 
+    console.log('hit /get_similarity');
     const rc = req.body;
     let embeddings_list = rc.embeddings_list;
     let granularities = rc.granularities_list;
@@ -287,12 +302,12 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
     let convo_tree = null;
     let asst = null;
     convo_tree = conversation_cache[key];        
-    if(convo_tree == null) {
+    if(convo_tree == null && key != null) {
         const filePath = getConvoPath(key);
         convo_tree = await convos.Convo.load(fs, filePath);
         if(convo_tree != null) {
             if(convo_tree.conversationId == null ) {
-                convo_tree.conversationId = key;
+                convo_tree.conversationId = key || uuidv4();
             }
             if(convo_tree.user_id == null)
                 convo_tree.user_id = 'global'
@@ -306,6 +321,8 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
     }
     if(convo_tree == null) {
         let convo_uuid = key;
+        if(convo_uuid == null || convo_uuid == '')
+            convo_uuid = uuidv4();
         convo_tree = new convos.Convo(convo_uuid);
         convo_tree.user_id = req.user_id;
         conversation_cache[convo_tree.conversationId] = convo_tree;
@@ -348,10 +365,10 @@ async function find_load_make_convo(key, res, make=true, req = {user_id:'global'
         if(convo_tree.user_id != req.user_id && convo_tree.user_id != 'global') {
             convo_tree = null;
         } else {
-            if(event_streamers[convo_tree.conversationId] == null) {
-                event_streamers[convo_tree.conversationId] = new EventStreamer(res);
+            if(event_streamers[convo_tree.conversationId] == null && res != null) {
+                event_streamers[convo_tree.conversationId] = new EventStreamer(res, res.user_id);
                 asst_cache[convo_tree.conversationId] = asst_cache[convo_tree.conversationId] || initAsstFor(convo_tree);
-            }
+            }            
         }
         streamer = event_streamers[convo_tree.conversationId];
     }

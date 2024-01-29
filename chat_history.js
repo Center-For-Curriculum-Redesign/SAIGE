@@ -8,13 +8,11 @@ export const getType = (obj) => obj?.constructor?.name || Object.prototype.toStr
 
 export class Convo {
     constructor(conversationId, systemStartText, startSequence = null, startKvCache = null, formatter = null, tokenizer = null) {
-        this.messageMap = {};        
-        
-        this.activePath = null;
+        this.messageMap = {}; 
+        this.activePath = "root";
         this.systemPrompt = systemStartText;
         this.formatter = formatter;
         this.conversationId = conversationId;
-        // Additional initialization if needed
     }
 
     initRoot(rootNode = null) {
@@ -25,8 +23,9 @@ export class Convo {
             this.messages = new MessageHistories(null, null, this.conversationId, this);
             this.messages.setNodeId('root');
         } else {
-            this.messages = rootNode;
+            this.messages = rootNode;            
         }
+        this.activePath = "root";
         this.messageMap[this.messages.messagenodeUuid] = this.messages;
     }
 
@@ -56,7 +55,7 @@ export class Convo {
         let new_node = new MessageHistories(author, textContent, this.conversationId, this);
         if (this.messages === null) {
             this.messages = new_node;
-            new_node.setNodeId("0");
+            new_node.setNodeId("root");
             if(notify) {
                 this._on_structure_change('node_added', new_node);
             }
@@ -451,22 +450,28 @@ export class MessageHistories {
         }
         let splitted = subnodeString.split("#", 2);
         let toGet = splitted[0];
-        if (splitted.length === 1) {
-            if (toGet !== this.nodeId) {
-                throw new Error(`node_entry ${fullSequence} not found: When attempting to get: ${toGet} in ${this.nodeId} with subnodestring ${subnodeString}`);
-            } else {
+        if (splitted.length === 1 && toGet == this.nodeId) {
+            //if (toGet !== this.nodeId) {
+            //    throw new Error('node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString);
+            //} else {
                 return [this];
-            }
-        } else if (splitted.length > 1) {
-            let nextDesc = splitted[1].split("#", 2)[0];            
-            if (nextDesc in this.children) {
-                //this.activeDescendants = nextDesc;
-                return [this].concat(this.children[nextDesc].historyAsList(splitted[1], fullSequence));
-            } else {
+            //}
+        } else if (splitted.length > 1 || toGet != this.nodeId) {
+            if(splitted.length > 1) {
+                let nextDesc = splitted[1].split("#", 2)[0];      
+                if (nextDesc in this.children) {
+                    //this.activeDescendants = nextDesc;
+                    return [this].concat(this.children[nextDesc].historyAsList(splitted[1], fullSequence));
+                }
+            } else if(toGet == this.nodeId) {
                 return [this];
+            } else {
+                let err = 'node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString;
+                throw new Error(err);
             }
         }
-        throw new Error(`node_entry ${fullSequence} not found: ` + fullSequence);
+        let err = 'node_entry '+fullSequence+' not found: When attempting to get: '+toGet+' in '+this.nodeId+'with subnodestring '+subnodeString;
+        throw new Error(err);
     }
 
     // Converts the current object and its children to a JSON object

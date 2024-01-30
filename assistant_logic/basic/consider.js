@@ -77,8 +77,8 @@ export function ponderPromptInst(newAsst, endpoints_available) {
                 \n${r.text_content}\n</meta-searchresult>\n`;
                 thoughtString += resultString;
             }
-            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use the <meta-citation> tags in conjunction with the result_ids to provide inline rerences to the articles for the user. (The new chat system will conveniently generate a bibliograpghy for me from my inline citations, so I will avoid explicitly providing one at the end)" : "";
-            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech: `According to <sup><meta-citation result_id="${top_results[0].article_id}">1</meta-citation></sup>`});
+            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use <meta-citation> tags with result_id attributes to provide inline numerical superscript citation references to the articles for the user. (The new chat system will conveniently generate a bibliograpghy for me from my inline numerical superscript citations like `<sup><meta-citation result_id=\"EJxxxx\" page_number_start=\"xx\">1</meta-citation></sup>`, so I will avoid explicitly providing a bibliography at the end and stick to the numerical superscript format.)" : "";
+            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech:'' /*`According to <sup><meta-citation result_id="${top_results[0].article_id}">1</meta-citation></sup>`*/});
             let resultNode = s.convo_branch[s.convo_branch.length-1] 
             resultNode.citations = top_results;
         }

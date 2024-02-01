@@ -81,6 +81,7 @@ export const justrun = new AnalysisNode(
                 model: model_name,
                 prompt: active_modded_prompt,
                 temperature: 0.3,
+                repetition_penalty: 1.06,
                 min_p: 0.25,
                 stream: true,
                 max_tokens: 8092

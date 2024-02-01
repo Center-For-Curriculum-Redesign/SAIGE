@@ -61,19 +61,22 @@ export const _localgetSimilarEmbeddings = async(embeddings_list, granularities_l
     if(resultObj.rows.length > 0) {
       groupedResults[resultObj.rows[0]['granularity']] = resultObj.rows;
       for(let r of resultObj.rows) {
-        r.page_number_start = r.page_number;
-        r.page_number_end = r.page_number;
+        r = _localExpandChunk(r);
+        //r.page_number_start = r.page_number;
+        //r.page_number_end = r.page_number;
       }
     }
   }
   return groupedResults;
 }
 
-export const _localExpandChunk = async (inputChunk, n_before=1, n_after=1) => {
+export const _localExpandChunk = async (inputChunk, n_before=1, n_after=1) => {  
   let chunk_number_start = inputChunk.chunk_number_start ? inputChunk.chunk_number_start : inputChunk.chunk_number;
+  let addmore = 0;
+  if(chunk_number_start == 0) addmore = 1;
   chunk_number_start = Math.max(0, chunk_number_start-n_before); 
   let chunk_number_end = inputChunk.chunk_number_end ? inputChunk.chunk_number_end : inputChunk.chunk_number;
-  chunk_number_end = chunk_number_end+n_after;
+  chunk_number_end = chunk_number_end+n_after+addmore;
   let article_id = inputChunk.article_id;
   let granularity = inputChunk.granularity;
   let queryText = `SELECT c.text_content, c.page_number, a.issn, a.title, a.peerreviewed, c.chunk_number, c.publisher, c.identifiersgeo, a.article_id, a.referencecount, c.granularity FROM articles AS a, chunks_`+granularity+` AS c WHERE c.article_id = a.article_id and a.article_id = $1 and chunk_number >= $2 and chunk_number <= $3`;

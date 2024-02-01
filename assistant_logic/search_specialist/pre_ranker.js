@@ -148,7 +148,7 @@ const runsearch = async (
         intoNode.setContent('', true);
 
         for(let descres of doc_result['desc']) {
-          let resstring = '**'+descres.title ?? '' +"**\n" +descres.text_content+'\n\n';
+          let resstring = (descres.title || '') +"\n" +descres.text_content+'\n\n';
           all_results_string += resstring;
           intoNode.appendContent(resstring,true);
         }

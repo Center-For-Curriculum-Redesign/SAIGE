@@ -73,7 +73,7 @@ const loopEval = async (run_node, s, in_packets, into_node) => {
     return output;
 }
 
-const CONCURRENT_MAX = 3;
+const CONCURRENT_MAX = 5;
 export const aggregate_result_usefulness = new AnalysisNode(async (s = {
     prompt_coordinator : null,// ref to the prompt_coordinator issuing this analysis
     assistant : null,//ref to assistant object

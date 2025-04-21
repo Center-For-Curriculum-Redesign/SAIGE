@@ -5,3 +5,6 @@ tls/fullchain.pem
 tls/privkey.pem
 nohup.out
 .env
+endpoints_available/known_endpoints.json
+endpoints_available/known_users.json
+external_hooks/last_response.json

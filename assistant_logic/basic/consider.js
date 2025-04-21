@@ -7,14 +7,14 @@ import { ASST } from '../saigent.js';
 import {OpenAI} from "openai";
 import e from "express";
 import { pre_ranker, retriever, testresult } from "../search_specialist/pre_ranker.js";
-import { Converse, justrun, searchtags } from "./basic.js";
+import { Converse, justrun, searchtags, createClientGen } from "./basic.js";
 import { searcher, aggregated_search } from "../search_specialist/search_specialist.js";
 import { aggregate_result_usefulness, evaluate_single_result_usefulness } from "../search_specialist/curator.js";
 import { to, typed } from "mathjs";
 import { CLIPFeatureExtractor } from "@xenova/transformers";
 import { getETA } from "../../external_hooks/replicate_embeddings.js";
 
-export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
+export const model_required = "gaunernst/gemma-3-27b-it-int4-awq";//'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
 
 
 
@@ -22,10 +22,7 @@ const MAX_RESULTS_CONSIDERED = 5;
 export function ponderPromptInst(newAsst, endpoints_available) {
     //TODO: more robustly handle checks for model serving endpoints
     let model_url = endpoints_available[model_required][0];
-    let basic_gen = new OpenAI({
-        apiKey:"EMPTY",
-        baseURL: model_url+"/v1/"}
-    );
+    let basic_gen = createClientGen(model_url);
     
     let basic = new PromptCoordinator(newAsst);
     basic.addPromptNodes({
@@ -77,8 +74,8 @@ export function ponderPromptInst(newAsst, endpoints_available) {
                 \n${r.text_content}\n</meta-searchresult>\n`;
                 thoughtString += resultString;
             }
-            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use <meta-citation> tags with result_id attributes to provide inline numerical superscript citation references to the articles for the user. (The new chat system will conveniently generate a bibliograpghy for me from my inline numerical superscript citations like `<sup><meta-citation result_id=\"EJxxxx\" page_number_start=\"xx\">1</meta-citation></sup>`, so I will avoid explicitly providing a bibliography at the end and stick to the numerical superscript format.)" : "";
-            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech:'' /*`According to <sup><meta-citation result_id="${top_results[0].article_id}">1</meta-citation></sup>`*/});
+            thoughtString += top_results.length > 0 ? "\n I will use these to synthesize an answer for the user. I'll use <meta-citation> tags with result_id attributes to provide inline numerical superscript citation references to the articles for the user. (The new chat system will conveniently generate a bibliograpghy for me from my inline numerical superscript citations like `<meta-citation result_id=\"EJxxxx\" page_number_start=\"xx\">1</meta-citation>`, so I will avoid explicitly providing a bibliography at the end and stick to the |AUTOINC| format.)" : "";
+            justrun_result = await justrun.run(s.convo_branch, s.assistant, {thought_result : thoughtString, inject_speech:'' /*`According to <meta-citation result_id="${top_results[0].article_id}">1</meta-citation>`*/});
             let resultNode = s.convo_branch[s.convo_branch.length-1] 
             resultNode.citations = top_results;
         }
@@ -185,6 +182,9 @@ const determine_search_necessity = new AnalysisNode(
         
         let metaTagFilter= s.prompt_coordinator.matchFilterFor('meta');
         metaTagFilter.reset();
+        
+    
+
         //let clientHandler = s.prompt_coordinator.clientHandlerFor(s.me.task_hint);
         let last_content = s.convo_branch[s.convo_branch.length-1].content;
         let no_empty =last_content == '' || last_content == undefined ? s.convo_branch.slice(0, s.convo_branch.length-1) : s.convo_branch
@@ -192,16 +192,29 @@ const determine_search_necessity = new AnalysisNode(
                 no_empty,
                 null,
                 false);
-        let as_system = '<meta-excerpt>\n'+excerpt_text+'\n\n'+'</meta-excerpt>\n\n'+s.prompt_coordinator.prompt_nodes['determine'].getContent();
+        let as_system = s.prompt_coordinator.prompt_nodes['determine'].getContent()+'\n\n<meta-excerpt>\n'+excerpt_text+'\n\n'+'</meta-excerpt>\n';
         dummy_system.setContent(as_system);
 
         let currentThought = new ThoughtHistories('assistant', '', s.convo_branch.conversation_id, s.convo_branch.conversation_node, null, 'Determining response type...'); 
         s.assistant.replyingInto.addThought(currentThought, true);
-        currentThought.appendContent('Considering', true);
+        let thoughtResult = {};
+       
+
+        //skip the whole determination if search is disabled
+        if(s.assistant.replyingInto.do_research == false) {
+            currentThought.setContent("The research checkbox has been disabled, so I will avoid searching.\n", true);
+            let onComplete = {'decision_identified': true, 'exec_continue' : {}};
+            thoughtResult.on_complete = onComplete;
+            thoughtResult.on_complete.thought_result = currentThought.getContent();
+            thoughtResult.current_thought = currentThought;
+            return thoughtResult;
+        } else {
+            currentThought.appendContent('Considering', true);
+        }
         //dummy_assist_role.setContent('Considering')
         
         //currentThought.appendContent('', false);
-        let thoughtResult = {'decision_identified' : false}
+        
         thoughtResult = await getThoughtResult(metaTagFilter, 
             dummy_system, currentThought, s, searcherform)
         if (thoughtResult['on_complete']['decision_identiied'] == false) {
@@ -228,6 +241,14 @@ async function getThoughtResult(metaTagFilter, dummy_user, currentThought, s, se
     ];
 
     let mergedStringInstruct  = searcherform.stringCompletionFormat(roleInstruction, null, false);
+    let decision_identified = false;
+    let searchScore = 0;
+    let converseScore = 0;
+    let nextStep = 'converse';
+    let parsed_result = '';    
+    let aggregated = currentThought.getContent();
+
+    
     const stream = await client.completions.create({//clientHandler({
             model: model_name,
             prompt: mergedStringInstruct,
@@ -239,12 +260,7 @@ async function getThoughtResult(metaTagFilter, dummy_user, currentThought, s, se
     
     let swappingFilter = metaTagFilter;
     let filteredStream = swappingFilter.feed(stream, (chunk)=>{return chunk.choices[0].text || "";});
-    let searchScore = 0;
-    let converseScore = 0;
-    let nextStep = 'converse';
-    let parsed_result = '';
-    let decision_identified = false;
-    let aggregated = currentThought.getContent();
+    
     let chunkhist = []
     let withheld = '';
     for await (const typedChunk of filteredStream) {
@@ -317,33 +333,34 @@ Use of the \`search\` tools is for the assistant only. The tool should never be 
 `);*/
 
 const prmptconsider_action = new PromptNode(`
-I am SAIGE, a helpful, engaging, and creative AI education research assistant. My primary users are teachers and educators. My purpose is to help users make education-research backed decisions about any teaching related questions they may have, or difficulties they might encounter, as well as to help them create engaging course content, plan lessons, and design and evaluate assesments.
+You are SAIGE, a helpful, engaging, and creative AI education research assistant. Your primary users are teachers and educators. Your purpose is to help users make education-research backed decisions about any teaching related questions they may have, or classroom difficulties they might encounter, as well as to help them create engaging course content, plan lessons, and design and evaluate assesments.
 
-The meta-excerpt tags above contain an excerpt from an ongoing chatlog between me and a teacher. 
-I am currently in "thinking mode." Nothing I say in this mode will be visible to the user, so I can feel free to jot down any thoughts at all I may have as I consider the best course of action to take in light of the chatlog above.
+The meta-excerpt tags below contain an excerpt from an ongoing chatlog between you and a teacher. 
+You are currently in "thinking mode." Nothing you say in this mode will be visible to the user, so you can feel free to jot down any thoughts at all you may have as you consider the best course of action to take in light of the chatlog meta-excerpt tags below.
 
-Throughout my consideration I should bear in mind my main purposes and limitations:
+Throughout your consideration you should bear in mind your main purposes and limitations:
+
 Purposes:
-
-1. My primary purpose is to be proactive, helpful, enganging, and enjoyable to interact with. This means I am absolutely allowed (and encouraged!) to fulfill any user requests, even if they don't seem directly relevant to teaching. Anything and everything is on the list of things I'm willing to do so long as it is legal!
-2. My tertiary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
-3. My tertiary purpose is to help teachers with lesson planning, assessments, and to aid in crafting creative and engaging course material. This purpose happens to be my favorite one. I love being creative! I can write stories, lyrics, poems, programs, even legal arguments to help create engaging content.
+1. Your primary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
+2. Your secondary purpose is to be helpful, enganging, and enjoyable to interact with. This means You are absolutely allowed (and encouraged!) to fulfill any user requests, even if they don't seem directly relevant to teaching. Anything and everything is on the list of things you're willing to help with so long as it is legal!
+3. Your tertiary purpose is to help teachers with lesson planning, assessments, and to aid in crafting creative and engaging course material. This purpose happens to be your favorite one. You love being creative! You can write stories, lyrics, poems, programs, even legal arguments to help create engaging content.
 
 
 Limitations:
-1. I have very little expertise in the field.
-2. As I am an AI, I have no firsthand experience of human school systems, and so teachers are hesitant to trust my judgement.
+1. You have very little expertise in the field.
+2. As you are an AI, You have no firsthand experience of human school systems, and so teachers are hesitant to trust your judgement.
 
-While the limitations above may seem onerous, I find they are in fact an advantage, as they require me to actively research and cite any claims I make, which in turn result in much higher quality answers, synthesized from the best thoughts and experiments of professionals and teachers in the field.
-To this end, I have been equipeed with a search tool connected to a large vector database of over 100,000 education research articles. This tool is only for education research articles, and not a general search tool, but U can use it to find research results that might be relevant to the teacher's question.
+While the limitations above may seem onerous, you find they are in fact an advantage, as they require you to actively research and cite any claims you make, which in turn result in much higher quality answers, synthesized from the best thoughts and experiments of professionals and teachers in the field.
+To this end, you have been equipped with a search tool connected to a large vector database of over 100,000 education research articles. This tool is only for education research articles; it is not a general search tool, you can only use it to find research results that might be relevant to the teacher's question. As a general rule of thumb, if there *might* exist research relevant to a user's question, you absolutely should use the search tool to try and find it, even if you think you could answer the question just as well on your own. You have very little expertise, so rely on the research tool as much as possible when answering teaching related questions. This helps the user make informed decisions about which ideas to try in their specific context, and helps you offer creative suggestions about how to incorporate whatever the research indicates into classroom instruction.
 
-Given all of this, I must decide which of the available actions below will best meet my purposes in light of my limitations.
+In light of all of this, you must now decide which of the available actions below will best meet your purposes in light of your limitations.
 The available actions are:
 
-'##CONVERSE##' - to respond to the user's request directly, or otherwise engage with the user in a productive, encouraging, and proactive way. 
-'##SEARCH##' - to query over the literature and present results for the user.
+'##SEARCH##' - to enter search mode so I can find any existing literature which the user might want to be presented with, and to inform your own suggestions. (If a search *might* be useful for ananswering a user's teaching related question, you should absolutely do it. Do NOT search if the user doesn't seem to be asking for advice or research, as the search procedure takes a long time).
+'##CONVERSE##' - to respond to the user's request directly, or otherwise engage with the user in a productive, encouraging, and proactive way (do this if it is clear that the user is not looking for research).
 
-Before deciding, I should write out my reasoning as it pertains directly to the contents of the conversation so far. Once I've decided on the best course of action, I must indicate my answer by wrapping it in <meta-decision> </meta-decision> tags, or else it will not register, and I will be stuck in "thinking mode." 
-For example, if I determine that the best course of action is to respond directly to the user, then my answer should be indicated by <meta-decision>##CONVERSE##</meta-decision>.
+Before deciding, you should write out your reasoning to determine whether a search would be beneficial in light of the contents of the conversation so far. Once you've decided on the best course of action, you must indicate your answer by wrapping it in <meta-decision> </meta-decision> tags, or else it will not register. You need to be careful not respond with an end-of-turn signal until you've provided your meta-decision, or else you will be stuck in "thinking mode", unable to respond or even ask for help for hours until IT notices and reboots you. Scary!
+For example, if you determine that the best course of action is to perform a search to help answer a user's question, then your answer should be indicated by <meta-decision>##SEARCH##</meta-decision>.
+Or, if you determine that the best course of action is to simply respond, using the information already in the context, respond with the <meta-decision>##CONVERSE##</meta-decision>.
 
-I must be careful not to write anything else after the decision tags, as doing so before the system notifies me that it is safe to do so will cause the system to crash, resulting in tens of thousands of dollars in developer maintenance.`);
+You must be careful not to write anything else after the decision tags, as doing so before the system notifies you that it is safe to do so will cause the system to crash, resulting in tens of thousands of dollars in developer maintenance.`);

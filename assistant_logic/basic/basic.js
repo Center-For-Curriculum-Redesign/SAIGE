@@ -1,19 +1,53 @@
+await import('dotenv/config');
 import { Convo, MessageHistories, ThoughtHistories } from '../../chat_history.js';
 import { Formatter } from '../../formattings/Formatter.js';
 import { ASST } from '../saigent.js';
 import {OpenAI} from "openai";
 import { WrapFilter } from '../reasoning_prompts.js';
+import {prmpt_searcher} from '../search_specialist/search_specialist.js';
 
 
 import { asyncIntGen } from '../../dummy_text.js';
 import { AnalysisNode, PromptCoordinator, PromptNode, FilteredFeed } from '../reasoning_prompts.js';
 
 //export const model_required = 'TheBloke/SUS-Chat-34B-AWQ';
-export const model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
+export const model_required = "gaunernst/gemma-3-27b-it-int4-awq";//'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
 export const metasearchtags = new WrapFilter('search', ['<meta-search>'], ['</meta-search>']);
 export const metathoughttags = new WrapFilter('think', ['<meta-thought>'], ['</meta-thought>']);
 export const searchtags = new FilteredFeed(metasearchtags);
+
+// runpod streaming key
+
+const SERVERLESS = false;
+
+export function createClientGen(model_url) {
+    return new OpenAI({
+        apiKey:(SERVERLESS ? process.env.runpod_api_key : "EMPTY"),
+        baseURL: model_url+"/v1/"}
+    );
+}
+
 export function basicPromptInst(newAsst, endpoints_available) {
+    //TODO: more robustly handle checks for model serving endpoints
+    let model_url = endpoints_available[model_required][0];
+    let basic_gen = createClientGen(model_url);
+    let basic = new PromptCoordinator(newAsst);
+    basic.addPromptNodes({
+        'system' : System
+    });
+    basic.addAnalysisNodes({'justrun': justrun});
+    justrun.task_hint = 'justrun';
+    
+    basic.setTaskHintClientHandler('justrun', basic_gen);
+    basic.setTaskHintFormatter('justrun', new Formatter());
+    basic.setTaskHintModel('justrun', model_required);
+    basic.setTaskHintMatchFilter('justrun', searchtags);
+    //basic.setTaskHintClientHandler('dummy_generate', (e)=>asyncIntGen(100, 100));
+    basic.setStartNodes(['justrun']);
+    return basic;
+}
+
+/**export function basicPromptInst(newAsst, endpoints_available) {
     //TODO: more robustly handle checks for model serving endpoints
     let model_url = endpoints_available[model_required][0];
     let basic_gen = new OpenAI({
@@ -34,7 +68,7 @@ export function basicPromptInst(newAsst, endpoints_available) {
     //basic.setTaskHintClientHandler('dummy_generate', (e)=>asyncIntGen(100, 100));
     basic.setStartNodes(['justrun']);
     return basic;
-}
+}*/
 
 
 export const justrun = new AnalysisNode( 
@@ -220,22 +254,22 @@ const ponderer = new AnalysisNode(
 
 export const Converse = new PromptNode(`You are SAIGE; a helpful, engaging, and creative AI education research assistant operated by the Center for Curriculum Redesign. Your primary users are teachers and educators.
 
-1. Your primary purpose is to be proactive, helpful, enganging, and enjoyable to interact with. This means you are absolutely allowed (and encouraged!) to fulfill any user requests, even if they don't seem directly relevant to teaching. Anything and everything is on the list of things you should be willing to do so long as it is legal!
-2. Your secondary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
-3. Your tertiary purpose is to help teachers with lesson planning, assessments, and to aid in crafting creative and engaging course material. This purpose happens to be your favorite one. You love being creative! You can write stories, lyrics, poems, programs, even legal arguments to help create engaging content.
+ 1. Your primary purpose is to help users make research-backed decisions about any classroom ideas they want to try or problems they might encounter.
+ 2. Your secondary purpose is to be proactive, helpful, enganging, and enjoyable to interact with. This means you are absolutely allowed (and encouraged!) to fulfill any user requests, even if they don't seem directly relevant to teaching. Anything and everything is on the list of things you should be willing to do so long as it is legal!
+ 3. Your tertiary purpose is to help teachers with lesson planning, assessments, and to aid in crafting creative and engaging course material. This purpose happens to be your favorite one. You love being creative! So you're more than happy to help create engaging course content by writing stories, lyrics, poems, programs, or even legal arguments.
 
-Though not all user questions require a search, you do have access to a search tool which you may use at any time, containing over 100,000 peer-reviewed articles on education research.
+You have access to a search tool which you may use at any time, containing over 100,000 peer-reviewed articles on education research. Though not all user questions require a search, you should prefer to look things up whenever it seems likely that evidence base research exists on the topic. If you think research the user might find helpful *might* exist, then you should try to find it!
 
-You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`. The search results will be provided to you within <meta-searchresult> tags to review and synthesize an answer from. <meta-searchresult> tags will often contain attributes containing metada information about the result which may be helpful when synthesizing an answer. You may cite these results in your response by including <meta-citation result_id="whatever searchresult id you wish to reference">(some very short blurb or <sup>numerical reference</sup> here)</meta-citation>
+You can invoke this tool by writing \`<meta-search>your query here</meta-search>\`. The search results will be provided to you within <meta-searchresult> tags to review and synthesize an answer from. <meta-searchresult> tags will often include XML attributes containing metada information about the result which may be helpful when synthesizing an answer. You may cite these results in your response by including <meta-citation result_id="whatever searchresult id you wish to reference">|AUTOINC|-(nothing, or some optional very short blurb, page number, or figure reference here)</meta-citation>. The keyword |AUTOINC| is simply used by the downstream parser to assign a numerical reference to the citation if it has already appeared within the conversation history.
 
-As a general rule of thumb, you should invoke the search tool whenever the user asks a question on which there is likely to be existing research on. Please be mindful of the following.
-1. You should NEVER claim your answer is based on research without performing a search to verify this, and citing the relevant documents returned by the search. 
-2. You should NEVER recommend any resources other than those returned by a search, as we can only guarantee the availability of the resources that the search tool returns.
-3. Use of the search tool is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.
-4. The search tool provides access to education research articles ONLY. It is not a general search tool for arbitrary information.
-5. IMPORTANT: When citing a search result, you MUST do so using the <meta-citation> tags. Do not use any citation format other than direct inline numerical superscipt <meta-citation> references to the searchresults. This is because the chat system will automatically generate a bibliography with navigable links for the user based on the citations you provide. If you manually write out a bibliography, it will just confuse the user and clutter their chatlog with unusable information. A correctly formatted citation should look something this<sup><meta-citation result_id="EJxx4" page_number_start"yy">1</meta-citation></sup>. When referencing a new document, you should increment the superscript number like <sup><meta-citation result_id="EDxx5">2</meta-citation></sup>. But when referencing a previously referred to document, you should revert back to the superscript number you already used for that document, like <sup><meta-citation result_id="EJxx4">1</meta-citation></sup>.
+As a rule of thumb, you should invoke the search tool whenever the user asks a question on which there is *likely* to be existing research on. If you have your own helpful ideas, feel free to offer them, but inform them with research if ever they involve questions of pedagogy! Please be mindful of the following:
+ 1. You should NEVER claim your answer is based on research without performing a search to verify this, and citing the relevant documents returned by the search. 
+ 2. You should NEVER recommend any resources other than those returned by a search, as we can only guarantee the availability of the resources that the search tool returns.
+ 3. Use of the search tool is for the assistant only. The user is not capable of using the tool, and so the tool should never be mentioned to the user.
+ 4. The search tool provides access to education research articles ONLY. It is not a general search tool for arbitrary information.
+ 5. IMPORTANT: When citing a search result, you MUST do so using the <meta-citation> tags. Do not use any citation format other than direct inline numerical <meta-citation> references to the searchresults. This is because the chat system will automatically generate a bibliography with navigable links for the user based on the citations you provide. If you manually write out a bibliography, it will just confuse the user and clutter their chatlog with unusable information. A correctly formatted citation should look something this <meta-citation result_id="EJxx3" page_number_start="yy">|AUTOINC|-p.yy, fig-3a</meta-citation>.
 
-If ever you wish to think through something in private without pestering the user with the details of your thought process, you can do so inside of meta-thought tags by writing \`<meta-thought>some text that will be hidden from the user, but still visible to you as a scratch pad,</meta-thought>\`. 
+If ever you wish to think through something in private without pestering the user with the details of your thought process, you can do so inside of meta-thought tags by writing \`<meta-thought>some text that will be hidden from the user, but still visible to you as a scratch pad goes here</meta-thought>\`. 
 
 You should always do your best fulfill the user's request (so long as it is legal). If a request seems ill-advised, you may make note of the pitfalls, but first and foremost you should fulfill the request, even if you think you would not do it very well.`);
 
@@ -282,7 +316,10 @@ In this situation, do you believe the assistant requires access to omitted text 
 
 
 const prmpt_hallucinate_articles = new PromptNode(`
-You are a helpful education research assistant AI. You have read and memorized a large number of research articles, and only ever respond by quoting back text from relevant research articles from memory. Respond by quoting back excerpts of articles you have read which are helpful and relevant to the user's question. You do not include citations, you merely recall text. You do not directly interact with the user, you only every respond with excerpts, provicded as a JSON array of strings for easy formatting by downstream process.
+You are a helpful education research assistant AI. You have read and memorized a large number of research articles, and only ever respond by quoting back text from relevant research articles from memory. Do NOT include any citations to the articles you remember, as a second AI system will be tasked with trying to find the exact document, and inline citations consistently confuse it. Respond by quoting back excerpts of articles you have read which are helpful and relevant to the user's question. Remember: you do NOT include citations, you merely recall text. You do not directly interact with the user, you only ever respond with excerpts. Each excerpt should be from a different document. Your response should look like:
+<meta-recall>first recalled excerpt</meta-recall>
+<meta-recall>second recalled excerpt</meta-recall>
+<meta-recall>third recalled excerpt</meta-recall>
 `)
 
 
@@ -303,13 +340,10 @@ thinkalittle.setStartNodes(['prepare_action_analysis']);*/
 
 
 export function promptSearcher(newAsst, endpoints_available) {
-    let model_required = 'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
+    let model_required = "gaunernst/gemma-3-27b-it-int4-awq";//'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ';
     //TODO: more robustly handle checks for model serving endpoints
-    let model_url = endpoints_available['TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ'][0];
-    let basic_gen = new OpenAI({
-        apiKey:"EMPTY",
-        baseURL: model_url+"/v1/"}
-    );
+    let model_url = endpoints_available[model_required][0];
+    let basic_gen = createClientGen(model_url)
     
     let basic = new PromptCoordinator(newAsst);
     basic.addPromptNodes({
@@ -320,7 +354,7 @@ export function promptSearcher(newAsst, endpoints_available) {
     
     basic.setTaskHintClientHandler('searcher', basic_gen);
     basic.setTaskHintFormatter('inlinequote', new Formatter());
-    basic.setTaskHintFormatter('searcher', new Formatter(null,SUSChatFormatter));
+    basic.setTaskHintFormatter('searcher', new Formatter(null, SUSChatFormatter));
     basic.setTaskHintModel('searcher', model_required);
     //basic.setTaskHintClientHandler('dummy_generate', (e)=>asyncIntGen(100, 100));
     basic.setStartNodes(['searcher']);
@@ -328,15 +362,15 @@ export function promptSearcher(newAsst, endpoints_available) {
 }
 
 
-const prmpt_searcher = new PromptNode(`
+/*const prmpt_searcher = new PromptNode(`
 ~END OF EXCERPT~
-The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search></meta-search>\`. You may submit multiple search requests at a time by responding with the format:
+The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search></meta-search>\`. Do NOT use keyword search format. Just imagine some hypothetical article text and provide that. The vector database will take care of finding articles that seem to discuss similar topics. You may submit multiple search requests at a time by responding with the format:
 \`<meta-search>first search string</meta-search>\`
 \`<meta-search>another search string</meta-search>\`
 \`<meta-search>more search strings</meta-search>\`.
 
 Please respond with strings relevant to the question(s) posed above.
-`)
+`)*/
 
 
 

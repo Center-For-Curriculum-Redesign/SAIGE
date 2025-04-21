@@ -3,16 +3,19 @@ import { WrapFilter, AnalysisNode, FilteredFeed, PromptNode } from "../reasoning
 import { QueuedPool } from "../../queuedPool.js";
 import { queryEmbRequest } from "../../external_hooks/replicate_embeddings.js";
 
-const prmpt_searcher = new PromptNode(`
-The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of text similar to that which might plausibly appear in research articles that would help the researcher inform the teacher. You submit the strings you come up with for procesing to a vector similarity search database by responding with the command \`<meta-search>relevant string here</meta-search>\`. You may submit multiple search requests at a time by responding with the format:
+export const prmpt_searcher = new PromptNode(`
+---
+The above is an excerpt from a chatlog between a teacher and a helpful education researcher. You are a search assistant AI which the researcher relies on to help them find relevant articles for teacher questions. Your purpose is to think of paragraph length excerpts of text similar to that which might plausibly appear in research articles relevant to the teachers question. Your imagined excerpts will be used for quering a vector database.
+Each of your generated texts should be wrapped in <meta-gen> tags.
+You may submit multiple search requests at a time by responding with the format:
 
-<meta-search>first hypothetical excerpt that might plausibly appear in a relevant article</meta-search>
+<meta-gen>first hypothetical excerpt that might plausibly appear in a relevant article</meta-gen>
 
-<meta-search>another fake excerpt that might plausibly appear in a relevant article</meta-search>
+<meta-gen>another fake excerpt that might plausibly appear in a relevant article</meta-gen>
 
-<meta-search>a third one for good measure</meta-search>
+<meta-gen>a third one for good measure</meta-gen>
 
-Please respond only with wrapped strings relevant to the question(s) posed above. Each query should be independently wrapped in its own <meta-search> tags. Please, do not respond directly to the user, as the user will never read anything you write.
+Respond only with wrapped paragraphs relevant to the question(s) posed above. Each query should be independently wrapped in its own <meta-gen> tags. Do not respond directly to the user, as the user will never read anything you write. Your outpiut will only be processed by a downstream system.
 `)
 
 
@@ -21,7 +24,7 @@ const cite_role = new MessageHistories('citation');
 const dummy_system = new MessageHistories('system');
 const dummy_user = new MessageHistories('user');
 
-let metasearchtags = new WrapFilter('search', ['<meta-search>'], ['</meta-search>']);
+let metasearchtags = new WrapFilter('search', ['<meta-gen'], ['</meta-gen>']);
 let metaSearchFilter = new FilteredFeed(metasearchtags);
 
 
@@ -105,7 +108,7 @@ export const searcher = new AnalysisNode(
                 false);
         let as_system = '<meta-excerpt>\n'+excerpt_text+'\n</meta-excerpt>'+prmpt_searcher.getContent();
         dummy_system.setContent(as_system)
-        dummy_searcassist_role.setContent('Here are some search terms:\n\n<meta-search> ')
+        dummy_searcassist_role.setContent('Here are some search terms:\n\n<meta-gen> ')
         let roleInstruction = [
             dummy_system,  
             dummy_searcassist_role            
@@ -170,7 +173,7 @@ export const searcher = new AnalysisNode(
 
         /**if the model failed to generate tags correctly, see if we can still extract anything */
         if(search_queries.length == 0) {
-            let intag = accumulated_raw.split("<meta-search>")[1]
+            let intag = accumulated_raw.split("<meta-gen>")[1]
             if(intag != null) {
                 let intagsplit = intag.split("\n")
                 for(let l in intagsplit) {

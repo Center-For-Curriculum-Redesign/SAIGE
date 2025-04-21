@@ -35,9 +35,10 @@ export class Convo {
         return this.messages.getNode(headlesssPath.pop());
     }
 
-    addReplyToUuid(messagenodeUuid, author = "user", textContent = null, notify = false) {
+    addReplyToUuid(messagenodeUuid, author = "user", textContent = null, full_object = {}, notify = false) {
         let addTo = this.messageMap[messagenodeUuid]
         let new_node = new MessageHistories(author, textContent, this.conversationId, this);
+        new_node.setResearchState(full_object?.do_research ?? false);
         addTo.addChildReply(new_node);
         this.activePath = new_node.getPath();
         new_node.setPath();
@@ -51,12 +52,15 @@ export class Convo {
         return this.messageMap[uuid];
     }
 
-    addReply(messagePath = null, author = "user", textContent = null, notify = false) {
+    addReply(messagePath = null, author = "user", textContent = null, full_object = {}, notify = false) {
         let new_node = new MessageHistories(author, textContent, this.conversationId, this);
+        new_node.setResearchState(full_object?.do_research ?? false);
         if (this.messages === null) {
             this.messages = new_node;
             new_node.setNodeId("root");
             if(notify) {
+                this.activePath = new_node.getPath();
+                new_node.setPath();
                 this._on_structure_change('node_added', new_node);
             }
         } else {
@@ -65,8 +69,6 @@ export class Convo {
             }
             this.getNode(messagePath).addChildReply(new_node, notify = false);
         }
-        this.activePath = new_node.getPath();
-        new_node.setPath();
         return new_node;
     }
 
@@ -225,7 +227,7 @@ export class Convo {
 
 
 export class MessageHistories {
-    constructor(author, textContent, conversationId, conversation_node , messagenodeUuid = null, title=null) {
+    constructor(author, textContent, conversationId, conversation_node, messagenodeUuid = null, title=null) {
         this.nodeId = null;
         this.messagenodeUuid = messagenodeUuid || uuidv4();
         this.conversationId = conversationId;
@@ -239,6 +241,10 @@ export class MessageHistories {
         this.parentNode = null;
         this.state = (this.author == 'user' || this.author == 'system') ? 'committed' : 'init';
         if(conversation_node) this.conversation_node?.register(this);
+    }
+
+    setResearchState(do_research) {
+        this.do_research = do_research;
     }
 
     setTitle(title, notify=true) {
@@ -506,6 +512,7 @@ export class MessageHistories {
             children: childrenJSON,
             thoughts: thoughtJSON,
             activeDescendants : this.activeDescendants,
+            do_research: this.do_research,
             textContent: this.textContent,
             author: this.author,
             state: this.state,
@@ -519,7 +526,8 @@ export class MessageHistories {
     // Static method to create a MessageHistories object from a JSON object
     static fromJSON(json, parentNode = null, conversation_id, conversation_node) {
         let messageHistory = new MessageHistories(json.author, json.textContent, conversation_id, conversation_node, json.messagenodeUuid, json.title);
-        messageHistory.activeDescendants = json.activeDescendants;
+        messageHistory.setResearchState(json?.do_research);
+       messageHistory.activeDescendants = json.activeDescendants;
         messageHistory.nodeId = json.nodeId;
         messageHistory.parentNode = parentNode;
         if(parentNode != null)

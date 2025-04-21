@@ -1,5 +1,5 @@
 await import('dotenv/config');
-import express from 'express';
+import express, { response } from 'express';
 import * as dummy_text from './dummy_text.js';
 import * as convos from './chat_history.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -165,8 +165,8 @@ app.post('/prompt_internal', async (req, res) => {
     let eventStreamer = event_streamers[convo_tree.conversationId]; 
     let assistant = asst_cache[convo_tree.conversationId];
     let new_reply = replyContent.replyingTo
-    	? convo_tree.addReplyToUuid(replyContent.replyingTo,'user',replyContent.prompt)
-    	: convo_tree.addReply(null,'user',replyContent.prompt);
+    	? convo_tree.addReplyToUuid(replyContent.replyingTo,'user',replyContent.prompt, replyContent)
+    	: convo_tree.addReply(null,'user',replyContent.prompt, replyContent);
     new_reply.conversationId = convo_tree.conversationId;
     let responseTo = new_reply.toJSON();
     eventStreamer.broadcastEvent({
@@ -207,8 +207,9 @@ app.post('/chat_commands/:key', async (req, res) => {
         let replyTo = convo_tree.getNodeByUuid(replyContent.replyingTo);
         if(replyTo != null) {
             if(key == 'user_reply') {
-                replyTo = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent, true);
+                replyTo = convo_tree.addReplyToUuid(replyContent.replyingTo, replyContent.asAuthor, replyContent.withContent, replyContent, true);
                 replyTo.conversationId = convo_tree.conversationId;
+                convo_tree.save(fs, filePath);
             }
             /*eventStreamer.broadcastEvent({
                 event_name: 'reply_committed',
@@ -403,6 +404,7 @@ function initAsstFor(convoTree, evst){
 function initAssistantResponseTo(asst, responseTo, commit_callback, user_id) {
     let resultNode = new convos.MessageHistories('assistant', '');
     resultNode.setIntendedParentNode(responseTo);
+    resultNode.setResearchState(responseTo.do_research);
     let data = resultNode.toJSON();
     let streamer = event_streamers[responseTo.conversationId];
     streamer.broadcastEvent({

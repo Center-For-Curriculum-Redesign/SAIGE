@@ -1,25 +1,28 @@
 export class EventStreamer {
-    constructor(res) {
+    constructor(res, user_id) {
         this.listeners = [];
-        if(res != null) {
-            this.registerListener(res);
+        if(res != null && user_id != null) {
+            this.registerListener(res, user_id);
         }
     }
 
-    broadcastEvent(data) {
+    broadcastEvent(data, user_id ) {
         if(data.server_timestamp == null)
                 data.server_timestamp = Number(new Date());
 
-        this.listeners.forEach(res => {            
-            this.sendEventTo(data, res);
+        this.listeners.forEach(res => {                    
+                this.sendEventTo(data, res, user_id);
         })
     };
 
-    sendEventTo(data, res) {
+    sendEventTo(data, res, user_id) {
         if(data.server_timestamp == null)
                 data.server_timestamp = Number(new Date());
-        let stringed = JSON.stringify(data);
-        res.write(`data: ${stringed}\n\n`);
+        if((res.user_id != null && res.user_id == user_id)
+        || res.user_id == 'global') {    
+            let stringed = JSON.stringify(data);
+            res.write(`data: ${stringed}\n\n`);
+        }
     };
 
     removeListener(res) {
@@ -31,14 +34,31 @@ export class EventStreamer {
         }
     }
 
-    registerListener(res) {
-        res.writeHead(200, {
+    registerListener(res, user_id) {
+        if(user_id == null) {
+            throw new Error("User_id required");
+        }
+        res.user_id = user_id;
+        if(this.listeners.includes(res)) {
+            return;
+        }
+        res.req.on('close', () => {
+            this.removeListener(res);
+            console.log('Client disconnected');
+        });
+        
+        const headers = {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
             'Access-Control-Allow-Origin': '*',
-        });
+        };
+    
+        // Add the Connection header only for HTTP/1.1 requests
+        if (res.req.httpVersion === '1.1') {
+            headers.Connection = 'keep-alive';
+        }
+        res.writeHead(200, headers);
         this.listeners.push(res);
-        this.sendEventTo({ message: 'Connected to SSE' }, res);
+        this.sendEventTo({ event_name: "ack", message: 'Connected to SSE' }, res, user_id);
     } 
 }

@@ -1,8 +1,4 @@
-Okay, here's an executive summary focusing on the novel and impressive aspects, suitable for a README.md and geared towards highlighting innovation for potential reviewers:
-
----
-
-## Executive Summary: SAIGE - AI Education Research Assistant
+## SAIGE - AI Education Research Assistant
 
 SAIGE is a specialized AI assistant framework designed to support educators and researchers by providing high-fidelity, research-backed insights. Operating under the Center for Curriculum Redesign, its primary goal is to bridge the gap between educational practice and peer-reviewed research findings.
 

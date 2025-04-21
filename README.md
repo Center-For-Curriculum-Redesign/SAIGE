@@ -17,5 +17,3 @@ SAIGE is a specialized AI assistant framework designed to support educators and 
 **System Architecture:**
 
 Built on Node.js with Express, SAIGE interfaces with external language models and a PostgreSQL/pgvector database for its research corpus. The frontend uses vanilla JavaScript and EJS templates, communicating with the backend via SSE for a dynamic user experience.
-
-In essence, SAIGE demonstrates a novel approach to building specialized AI assistants by combining advanced RAG techniques with sophisticated prompt engineering, modular reasoning, and transparent internal state management, specifically targeting the high-stakes domain of educational research support.
